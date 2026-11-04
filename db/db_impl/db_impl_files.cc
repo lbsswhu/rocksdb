@@ -376,6 +376,22 @@ void DBImpl::DeleteObsoleteFileImpl(int job_id, const std::string& fname,
   }
 }
 
+bool DBImpl::ShouldSyncWALClose(const JobContext& state,
+                               const log::Writer* writer) const {
+  const auto number = writer->get_log_number();
+  // This is deliberately more conservative than a full scan: only WALs
+  // explicitly made obsolete by the durable VersionSet state may skip sync.
+  if (!OwnTablesAndLogs() || immutable_db_options_.WAL_ttl_seconds > 0 ||
+      immutable_db_options_.WAL_size_limit_MB > 0 ||
+      number >= state.log_number || number == state.prev_log_number ||
+      std::find(state.log_recycle_files.begin(), state.log_recycle_files.end(),
+                number) != state.log_recycle_files.end()) {
+    return true;
+  }
+  return std::find(state.log_delete_files.begin(), state.log_delete_files.end(),
+                   number) == state.log_delete_files.end();
+}
+
 // Diffs the files listed in filenames and those that do not
 // belong to live files are possibly removed. Also, removes all the
 // files in sst_delete_files and log_delete_files.
@@ -472,7 +488,8 @@ void DBImpl::PurgeObsoleteFiles(JobContext& state, bool schedule_only) {
   // Close WALs before trying to delete them.
   for (const auto w : state.logs_to_free) {
     const bool zero_range = w->UsesZeroRangePreallocation();
-    auto s = w->Close(immutable_db_options_.use_fsync);
+    auto s = w->Close(immutable_db_options_.use_fsync,
+                       ShouldSyncWALClose(state, w));
     if (zero_range) {
       RecordWALFinalizationError(s);
     } else {

@@ -30,6 +30,8 @@ struct ReservationState {
   std::string data;
   std::vector<std::pair<uint64_t, uint64_t>> allocations;
   std::vector<std::string> operations;
+  size_t geometry_reads = 0;
+  size_t alignment_reads = 0;
   bool fail_allocate = false;
   bool fail_truncate = false;
   bool fail_write = false;
@@ -49,7 +51,15 @@ class ReservationFile : public FSWritableFile {
     return PreallocationMode::kZeroRange;
   }
   bool use_direct_io() const override { return direct_; }
-  size_t GetRequiredBufferAlignment() const override { return 512; }
+  bool IsSyncThreadSafe() const override { return true; }
+  size_t GetRequiredBufferAlignment() const override {
+    ++state_->alignment_reads;
+    return 512;
+  }
+  void GetPreallocationStatus(size_t* block_size, size_t* last_block) override {
+    ++state_->geometry_reads;
+    FSWritableFile::GetPreallocationStatus(block_size, last_block);
+  }
   IOStatus Allocate(uint64_t offset, uint64_t len, const IOOptions&,
                     IODebugContext*) override {
     state_->allocations.emplace_back(offset, len);
@@ -121,6 +131,104 @@ TEST_F(WritableFileWriterTest, ZeroRangeReservationAndSeal) {
   operations = state.operations;
   ASSERT_OK(writer.Close());
   EXPECT_EQ(operations, state.operations);
+}
+
+TEST_F(WritableFileWriterTest, ZeroRangeCachesGeometryAcrossReservations) {
+  for (bool direct : {false, true}) {
+    ReservationState state;
+    std::unique_ptr<FSWritableFile> file(new ReservationFile(&state, direct));
+    WritableFileWriter writer(std::move(file), "reservation", FileOptions());
+    ASSERT_OK(writer.Append("a"));
+    const auto geometry_reads = state.geometry_reads;
+    const auto alignment_reads = state.alignment_reads;
+    // Configuration is read once; this spans both the reserved fast path and
+    // several expansions, including a Direct I/O padded final write.
+    for (int i = 0; i < 30; ++i)
+      ASSERT_OK(writer.Append(std::string(101, 'x')));
+    EXPECT_EQ(geometry_reads, state.geometry_reads);
+    EXPECT_EQ(alignment_reads, state.alignment_reads);
+    ASSERT_EQ(3u, state.allocations.size());
+    ASSERT_OK(writer.FinishAndClose(false));
+    EXPECT_EQ("a" + std::string(3030, 'x'), state.data);
+  }
+}
+
+TEST_F(WritableFileWriterTest, ZeroRangeSealedSyncAvoidsDuplicateCloseSync) {
+  for (bool without_flush : {false, true}) {
+    for (bool fsync : {false, true}) {
+      ReservationState state;
+      std::unique_ptr<FSWritableFile> file(new ReservationFile(&state));
+      WritableFileWriter writer(std::move(file), "reservation", FileOptions());
+      ASSERT_OK(writer.Append("abc"));
+      ASSERT_OK(writer.Seal());
+      ASSERT_OK(without_flush ? writer.SyncWithoutFlush(fsync)
+                              : writer.Sync(fsync));
+      auto operations = state.operations;
+      ASSERT_OK(writer.FinishAndClose(fsync));
+      operations.push_back("close");
+      EXPECT_EQ(operations, state.operations);
+    }
+  }
+}
+
+TEST_F(WritableFileWriterTest, ZeroRangeSyncBeforeSealDoesNotCoverTruncate) {
+  ReservationState state;
+  std::unique_ptr<FSWritableFile> file(new ReservationFile(&state));
+  WritableFileWriter writer(std::move(file), "reservation", FileOptions());
+  ASSERT_OK(writer.Append("abc"));
+  ASSERT_OK(writer.Sync(false));
+  ASSERT_OK(writer.FinishAndClose(false));
+  EXPECT_EQ(
+      2, std::count(state.operations.begin(), state.operations.end(), "sync"));
+  EXPECT_EQ("truncate", state.operations[state.operations.size() - 3]);
+}
+
+TEST_F(WritableFileWriterTest, ZeroRangeSealedSyncLevelsAndFailure) {
+  for (bool fail_sync : {false, true}) {
+    ReservationState state;
+    std::unique_ptr<FSWritableFile> file(new ReservationFile(&state));
+    WritableFileWriter writer(std::move(file), "reservation", FileOptions());
+    ASSERT_OK(writer.Append("abc"));
+    ASSERT_OK(writer.Seal());
+    state.fail_sync = fail_sync;
+    auto status = writer.SyncWithoutFlush(false);
+    EXPECT_EQ(fail_sync, status.IsIOError());
+    state.fail_sync = false;
+    // A failed sync is not reusable; a successful fdatasync cannot stand in
+    // for a requested fsync. Conversely fsync covers a later fdatasync close.
+    ASSERT_OK(writer.SyncWithoutFlush(true));
+    auto operations = state.operations;
+    ASSERT_OK(writer.FinishAndClose(false));
+    operations.push_back("close");
+    EXPECT_EQ(operations, state.operations);
+  }
+}
+
+TEST_F(WritableFileWriterTest, ZeroRangeFailedSealedSyncRetriesAtClose) {
+  ReservationState state;
+  std::unique_ptr<FSWritableFile> file(new ReservationFile(&state));
+  WritableFileWriter writer(std::move(file), "reservation", FileOptions());
+  ASSERT_OK(writer.Append("abc"));
+  ASSERT_OK(writer.Seal());
+  state.fail_sync = true;
+  ASSERT_TRUE(writer.SyncWithoutFlush(false).IsIOError());
+  state.fail_sync = false;
+  ASSERT_OK(writer.FinishAndClose(false));
+  EXPECT_EQ(
+      2, std::count(state.operations.begin(), state.operations.end(), "sync"));
+}
+
+TEST_F(WritableFileWriterTest, ZeroRangeDataSyncDoesNotReplaceFinalFsync) {
+  ReservationState state;
+  std::unique_ptr<FSWritableFile> file(new ReservationFile(&state));
+  WritableFileWriter writer(std::move(file), "reservation", FileOptions());
+  ASSERT_OK(writer.Append("abc"));
+  ASSERT_OK(writer.Seal());
+  ASSERT_OK(writer.SyncWithoutFlush(false));
+  ASSERT_OK(writer.FinishAndClose(true));
+  EXPECT_EQ(
+      1, std::count(state.operations.begin(), state.operations.end(), "fsync"));
+  EXPECT_EQ("fsync", state.operations[state.operations.size() - 2]);
 }
 
 TEST_F(WritableFileWriterTest, ZeroRangeAllocationFailureRetained) {

@@ -72,66 +72,62 @@ def main():
         writer.writeheader()
         writer.writerows(results)
 
+    groups = list(dict.fromkeys(r["group"] for r in results))
+    comparators = [g for g in ("A1", "P", "A0") if g in groups and "B" in groups]
+    rounds = int(json.loads((args.root / "environment.json").read_text())["args"]["rounds"])
     lines = ["# ZERO_RANGE write-only benchmark results", "",
-             "Each cell is the median of five measured runs; round 0 is excluded.",
-             "A0: original release; A1: new release, flag off; B: same release, flag on.",
-             "Foreground threads: 1 or 4. Compaction/flush/drain/close are included",
-             "in process time, including the identical fixed 5-second wait.",
-             "All groups run final compactall to flush every active memtable, including",
-             "the original db_bench whose single-CF flush benchmark is a no-op.", "",
-             "Scenarios: main1/main4 = async random writes with WAL; sync1/sync4 =",
-             "sync=true random writes; sst = WAL disabled; direct = async with WAL",
-             "and direct SST I/O; directsst = WAL disabled and direct SST I/O;",
-             "seq = sequential writes; overwrite = independent copies of one seed DB.",
-             "Normal cases: 600000 writes, 64 MiB write buffer/target SST, 256 MiB level base.",
-             "Sync cases: 10000 writes, 1 MiB write buffer/target SST, 4 MiB level base.",
-             "Keys/values: 16/1024 bytes, no compression, batch=1, background jobs=2.", "",
-             "Foreground write throughput (excludes final compaction/flush/drain/close):", "",
-             "| Scenario | A0 ops/s | A1 ops/s | B ops/s | B/A1 | 95% bootstrap interval | B/A0 |",
-             "|---|---:|---:|---:|---:|---|---:|"]
+             f"Medians of {rounds} measured runs; round 0 excluded.",
+             "A0: original; A1: optimized flag off; P: frozen preoptimization flag on; B: optimized flag on.",
+             "Each executable explicitly selects its colocated shared library (environment.json).",
+             "Write-only foreground; end-to-end includes compaction, flush, drain, close and fixed 5 second wait.",
+             "Current runner uses CLOCK_MONOTONIC for process time; raw GNU time is retained separately.",
+             "No fixed wait is subtracted. Offline checksum/full scans are excluded from timings.", "",
+             "| Scenario | Operations | Threads | Batch | Write buffer bytes |",
+             "|---|---:|---:|---:|---:|"]
+    for scene in dict.fromkeys(r["scenario"] for r in results):
+        r = next(r for r in results if r["scenario"] == scene)
+        lines.append(f"| {scene} | {r['operations']} | {r['threads']} | {r.get('batch_size', 1)} | {r.get('buffer_size', 'see commands')} |")
     aggregate = {}
     for scene in dict.fromkeys(r["scenario"] for r in results):
         grouped = {g: [r for r in results if r["scenario"] == scene and
-                        r["group"] == g and r["round"] > 0]
-                   for g in ("A0", "A1", "B")}
-        if any(len(v) != 5 for v in grouped.values()):
-            raise RuntimeError("expected exactly five measured runs: " + scene)
+                        r["group"] == g and r["round"] > 0] for g in groups}
+        if any(len(v) != rounds for v in grouped.values()):
+            raise RuntimeError("incomplete measured rounds: " + scene)
         med = {g: {k: statistics.median(r[k] for r in rs if r.get(k) is not None)
                    for k in rs[0] if isinstance(rs[0][k], (int, float))}
                for g, rs in grouped.items()}
-        ci = bootstrap_interval([r["ops_sec"] for r in grouped["A1"]],
-                                [r["ops_sec"] for r in grouped["B"]])
-        a0, a1, b = (med[g]["ops_sec"] for g in ("A0", "A1", "B"))
-        delta = (b / a1 - 1) * 100
-        lines.append(f"| {scene} | {a0:.0f} | {a1:.0f} | {b:.0f} | {delta:+.2f}% | "
-                     f"[{ci[0]:+.2f}%, {ci[1]:+.2f}%] | {(b/a0-1)*100:+.2f}% |")
-        aggregate[scene] = {"medians": med, "b_vs_a1_percent": delta,
-                            "b_vs_a1_bootstrap_95_percent": ci}
-    lines += ["", "Intervals use independent bootstrap resampling of five per-run",
-              "throughput samples, seed 1001, 10000 resamples; exploratory, without",
-              "multiple-comparison correction. They do not establish portability.", "",
-              "End-to-end throughput includes all finalization stages and fixed waits.",
-              "A1/B additionally require two three-sample idle checks (~0.4 seconds).",
-              "That overhead is shared by A1/B, and is included when comparing to A0;",
-              "no wait time has been subtracted from any group.", "",
-              "| Scenario | A0 ops/s | A1 ops/s | B ops/s | B/A1 |",
-              "|---|---:|---:|---:|---:|"]
+        data = {"medians": med}
+        for g in comparators:
+            data["b_vs_" + g.lower() + "_percent"] = (med["B"]["ops_sec"] / med[g]["ops_sec"] - 1) * 100
+            data["b_vs_" + g.lower() + "_bootstrap_95_percent"] = bootstrap_interval(
+                [r["ops_sec"] for r in grouped[g]], [r["ops_sec"] for r in grouped["B"]])
+        aggregate[scene] = data
+    for metric, label in (("ops_sec", "Foreground throughput"), ("end_to_end_ops_sec", "End-to-end throughput")):
+        lines += ["", label, "", "| Scenario | " + " | ".join(groups) +
+                  " | " + " | ".join("B/" + g for g in comparators) + " |",
+                  "|---|" + "---:|" * (len(groups) + len(comparators))]
+        for scene, data in aggregate.items():
+            med = data["medians"]
+            cells = [f"{med[g][metric]:.0f}" for g in groups]
+            cells += [f"{(med['B'][metric]/med[g][metric]-1)*100:+.2f}%" for g in comparators]
+            lines.append("| " + scene + " | " + " | ".join(cells) + " |")
+    lines += ["", "Foreground change and 95% independent bootstrap interval (10000 resamples, seed 1001):", "",
+              "| Scenario | Comparison | Change | 95% interval |", "|---|---|---:|---|"]
     for scene, data in aggregate.items():
-        a0, a1, b = (data["medians"][g]["end_to_end_ops_sec"]
-                      for g in ("A0", "A1", "B"))
-        lines.append(f"| {scene} | {a0:.0f} | {a1:.0f} | {b:.0f} | {(b/a1-1)*100:+.2f}% |")
-    lines += ["",
-              "P99 below is the median of five per-run P99 values, not a pooled P99.", "",
-              "Peak space is sampled from directory st_blocks every 100ms, not an exact",
-              "device-wide high-water mark. Raw time.txt records CPU/RSS/filesystem output.", "",
-              "| Scenario | A1/B P99 us | A1/B process s | A1/B close ms | A1/B peak allocated MiB |",
-              "|---|---:|---:|---:|---:|"]
+        for g in comparators:
+            delta = data["b_vs_" + g.lower() + "_percent"]
+            ci = data["b_vs_" + g.lower() + "_bootstrap_95_percent"]
+            lines.append(f"| {scene} | B/{g} | {delta:+.2f}% | [{ci[0]:+.2f}%, {ci[1]:+.2f}%] |")
+    lines += ["", "Intervals are exploratory without multiple-comparison correction; not a portability claim.",
+              "P99 is the median of per-run P99 values, not pooled. Peak space is sampled, not a device high-water mark.", "",
+              "| Scenario | Group | P99 us | Process s | Close ms | User/system CPU s | Peak allocated MiB |",
+              "|---|---|---:|---:|---:|---|---:|"]
     for scene, data in aggregate.items():
-        a, b = data["medians"]["A1"], data["medians"]["B"]
-        lines.append(f"| {scene} | {a['write_op_p99_us']:.2f}/{b['write_op_p99_us']:.2f} | "
-                     f"{a['process_seconds']:.2f}/{b['process_seconds']:.2f} | "
-                     f"{a['close_us']/1000:.2f}/{b['close_us']/1000:.2f} | "
-                     f"{a['peak_allocated_bytes']/2**20:.1f}/{b['peak_allocated_bytes']/2**20:.1f} |")
+        for g, m in data["medians"].items():
+            close = m.get("close_us")
+            close_text = f"{close/1000:.2f}" if close is not None else "unavailable"
+            lines.append(f"| {scene} | {g} | {m['write_op_p99_us']:.2f} | {m['process_seconds']:.2f} | {close_text} | "
+                         f"{m['cpu_user_seconds']:.2f}/{m['cpu_system_seconds']:.2f} | {m['peak_allocated_bytes']/2**20:.1f} |")
     (args.root / "analysis.json").write_text(json.dumps(aggregate, indent=2))
     notes = args.root / "post-measurement-notes.json"
     if notes.exists():

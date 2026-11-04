@@ -92,7 +92,9 @@ class Writer {
 
   // Stop appending and trim reserved space without changing the sync policy.
   IOStatus Seal();
-  IOStatus Close(bool use_fsync = false);
+  // sync=false is only for a WAL proven obsolete and selected for deletion.
+  // Retained/archived writers and normal DB close keep the default durability.
+  IOStatus Close(bool use_fsync = false, bool sync = true);
 
   uint64_t ReadableEnd() const {
     return readable_end_.load(std::memory_order_acquire);

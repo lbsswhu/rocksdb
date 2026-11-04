@@ -71,7 +71,7 @@ IOStatus Writer::Seal() {
   return s;
 }
 
-IOStatus Writer::Close(bool use_fsync) {
+IOStatus Writer::Close(bool use_fsync, bool sync) {
   IOStatus s;
   if (dest_) {
     s = WriteBuffer();
@@ -79,7 +79,8 @@ IOStatus Writer::Close(bool use_fsync) {
       if (s.ok()) {
         s = Seal();
       }
-      IOStatus close_status = dest_->FinishAndClose(use_fsync);
+      IOStatus close_status = sync ? dest_->FinishAndClose(use_fsync)
+                                   : dest_->Close();
       if (s.ok()) {
         s = close_status;
       } else {

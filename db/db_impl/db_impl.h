@@ -673,6 +673,11 @@ class DBImpl : public DB {
   // schedule a purge
   void ScheduleBgLogWriterClose(JobContext* job_context);
 
+  // Writer ownership is independent of file obsolescence. Only an explicit
+  // deletion candidate in this cleanup snapshot can omit its final WAL sync.
+  bool ShouldSyncWALClose(const JobContext& job_context,
+                          const log::Writer* writer) const;
+
   uint64_t MinLogNumberToKeep();
 
   // Returns the lower bound file number for SSTs that won't be deleted, even if
@@ -888,8 +893,8 @@ class DBImpl : public DB {
     recovered_transactions_.clear();
   }
 
-  void AddToLogsToFreeQueue(log::Writer* log_writer) {
-    logs_to_free_queue_.push_back(log_writer);
+  void AddToLogsToFreeQueue(log::Writer* log_writer, bool sync = true) {
+    logs_to_free_queue_.emplace_back(log_writer, sync);
   }
 
   void AddSuperVersionsToFreeQueue(SuperVersion* sv) {
@@ -2149,7 +2154,7 @@ class DBImpl : public DB {
   std::unordered_set<uint64_t> files_grabbed_for_purge_;
 
   // A queue to store log writers to close
-  std::deque<log::Writer*> logs_to_free_queue_;
+  std::deque<std::pair<log::Writer*, bool>> logs_to_free_queue_;
   std::deque<SuperVersion*> superversions_to_free_queue_;
   int unscheduled_flushes_;
   int unscheduled_compactions_;

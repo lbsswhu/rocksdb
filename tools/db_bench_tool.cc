@@ -1941,10 +1941,11 @@ struct DBWithColumnFamilies {
                   [](ColumnFamilyHandle* cfhi) { delete cfhi; });
     cfh.clear();
     if (db != nullptr) {
-      const uint64_t begin = FLAGS_env->NowMicros();
+      const uint64_t begin = FLAGS_env->NowNanos() / 1000;
       Status close_status = db->Close();
       fprintf(stdout, "db_close_micros=%" PRIu64 " status=%s\n",
-              FLAGS_env->NowMicros() - begin, close_status.ToString().c_str());
+              FLAGS_env->NowNanos() / 1000 - begin,
+              close_status.ToString().c_str());
       if (!close_status.ok()) {
         fprintf(stderr, "DB::Close failed: %s\n",
                 close_status.ToString().c_str());
@@ -2154,6 +2155,9 @@ class Stats {
     reporter_agent_ = reporter_agent;
   }
 
+  // Benchmark intervals must not change when the wall clock is adjusted.
+  uint64_t NowMicros() const { return clock_->NowNanos() / 1000; }
+
   void Start(int id) {
     id_ = id;
     next_report_ = FLAGS_stats_interval ? FLAGS_stats_interval : 100;
@@ -2163,8 +2167,8 @@ class Stats {
     last_report_done_ = 0;
     bytes_ = 0;
     seconds_ = 0;
-    start_ = clock_->NowMicros();
-    sine_interval_ = clock_->NowMicros();
+    start_ = NowMicros();
+    sine_interval_ = NowMicros();
     finish_ = start_;
     last_report_finish_ = start_;
     message_.clear();
@@ -2196,7 +2200,7 @@ class Stats {
   }
 
   void Stop() {
-    finish_ = clock_->NowMicros();
+    finish_ = NowMicros();
     seconds_ = (finish_ - start_) * 1e-6;
   }
 
@@ -2237,7 +2241,7 @@ class Stats {
     }
   }
 
-  void ResetSineInterval() { sine_interval_ = clock_->NowMicros(); }
+  void ResetSineInterval() { sine_interval_ = NowMicros(); }
 
   uint64_t GetSineInterval() {
     return sine_interval_;
@@ -2249,7 +2253,7 @@ class Stats {
 
   void ResetLastOpTime() {
     // Set to now to avoid latency from calls to SleepForMicroseconds
-    last_op_finish_ = clock_->NowMicros();
+    last_op_finish_ = NowMicros();
   }
 
   void FinishedOps(DBWithColumnFamilies* db_with_cfh, DB* db, int64_t num_ops,
@@ -2258,7 +2262,7 @@ class Stats {
       reporter_agent_->ReportFinishedOps(num_ops);
     }
     if (FLAGS_histogram) {
-      uint64_t now = clock_->NowMicros();
+      uint64_t now = NowMicros();
       uint64_t micros = now - last_op_finish_;
 
       if (hist_.find(op_type) == hist_.end())
@@ -2287,7 +2291,7 @@ class Stats {
         else                            next_report_ += 100000;
         fprintf(stderr, "... finished %" PRIu64 " ops%30s\r", done_, "");
       } else {
-        uint64_t now = clock_->NowMicros();
+        uint64_t now = NowMicros();
         int64_t usecs_since_last = now - last_report_finish_;
 
         // Determine whether to print status where interval is either
@@ -2303,7 +2307,7 @@ class Stats {
                   "%s ... thread %d: (%" PRIu64 ",%" PRIu64
                   ") ops and "
                   "(%.1f,%.1f) ops/second in (%.6f,%.6f) seconds\n",
-                  clock_->TimeToString(now / 1000000).c_str(), id_,
+                  clock_->TimeToString(clock_->NowMicros() / 1000000).c_str(), id_,
                   done_ - last_report_done_, done_,
                   (done_ - last_report_done_) / (usecs_since_last / 1000000.0),
                   done_ / ((now - start_) / 1000000.0),
@@ -5124,7 +5128,7 @@ class Benchmark {
       thread->stats.FinishedOps(db_with_cfh, db_with_cfh->db,
                                 entries_per_batch_, kWrite);
       if (FLAGS_sine_write_rate) {
-        uint64_t now = FLAGS_env->NowMicros();
+        uint64_t now = thread->stats.NowMicros();
 
         uint64_t usecs_since_last;
         if (now > thread->stats.GetSineInterval()) {
@@ -6216,7 +6220,7 @@ class Benchmark {
       int query_type = query.GetType(rand_v);
 
       // change the qps
-      uint64_t now = FLAGS_env->NowMicros();
+      uint64_t now = thread->stats.NowMicros();
       uint64_t usecs_since_last;
       if (now > thread->stats.GetSineInterval()) {
         usecs_since_last = now - thread->stats.GetSineInterval();
@@ -7741,7 +7745,7 @@ class Benchmark {
   }
 
   void CompactAll() {
-    const uint64_t begin = FLAGS_env->NowMicros();
+    const uint64_t begin = (FLAGS_env->NowNanos() / 1000);
     auto compact = [](DB* db) {
       Status status = db->CompactRange(CompactRangeOptions(), nullptr, nullptr);
       if (!status.ok()) {
@@ -7756,7 +7760,7 @@ class Benchmark {
       compact(db_with_cfh.db);
     }
     fprintf(stdout, "compactall_micros=%" PRIu64 "\n",
-            FLAGS_env->NowMicros() - begin);
+            (FLAGS_env->NowNanos() / 1000) - begin);
   }
 
 #ifndef ROCKSDB_LITE
@@ -7774,7 +7778,7 @@ class Benchmark {
     fprintf(stdout, "waitforcompaction(%s): started\n",
             db.db->GetName().c_str());
 
-    const uint64_t begin = FLAGS_env->NowMicros();
+    const uint64_t begin = (FLAGS_env->NowNanos() / 1000);
     unsigned idle_samples = 0;
     while (idle_samples < 3) {
       bool retry = false;
@@ -7792,7 +7796,7 @@ class Benchmark {
       }
 
       idle_samples = retry ? 0 : idle_samples + 1;
-      if (FLAGS_env->NowMicros() - begin > 300000000) {
+      if ((FLAGS_env->NowNanos() / 1000) - begin > 300000000) {
         fprintf(stderr, "waitforcompaction timeout after 300 seconds\n");
         exit(1);
       }
@@ -7801,13 +7805,13 @@ class Benchmark {
     fprintf(stdout,
             "waitforcompaction(%s): finished drain_micros=%" PRIu64
             " idle_samples=%u\n",
-            db.db->GetName().c_str(), FLAGS_env->NowMicros() - begin,
+            db.db->GetName().c_str(), (FLAGS_env->NowNanos() / 1000) - begin,
             idle_samples);
   }
 
   void WaitForCompaction() {
     // Give background threads a chance to wake
-    const uint64_t begin = FLAGS_env->NowMicros();
+    const uint64_t begin = (FLAGS_env->NowNanos() / 1000);
     FLAGS_env->SleepForMicroseconds(5 * 1000000);
 
     // I am skeptical that this check race free. I hope that checking twice
@@ -7824,7 +7828,7 @@ class Benchmark {
     fprintf(stdout,
             "waitforcompaction_total_micros=%" PRIu64
             " fixed_wait_micros=5000000\n",
-            FLAGS_env->NowMicros() - begin);
+            (FLAGS_env->NowNanos() / 1000) - begin);
   }
 
   bool CompactLevelHelper(DBWithColumnFamilies& db_with_cfh, int from_level) {
@@ -7909,7 +7913,7 @@ class Benchmark {
 #endif
 
   void Flush() {
-    const uint64_t begin = FLAGS_env->NowMicros();
+    const uint64_t begin = (FLAGS_env->NowNanos() / 1000);
     FlushOptions flush_opt;
     flush_opt.wait = true;
 
@@ -7932,7 +7936,7 @@ class Benchmark {
       }
     }
     fprintf(stdout, "flush memtable flush_micros=%" PRIu64 "\n",
-            FLAGS_env->NowMicros() - begin);
+            (FLAGS_env->NowNanos() / 1000) - begin);
   }
 
   void ResetStats() {

@@ -52,11 +52,13 @@ IOStatus WritableFileWriter::PrepareAppend(uint64_t offset, size_t len) {
     return IOStatus::OK();
   }
   if (len == 0) return IOStatus::OK();
-  size_t block_size = 0, ignored = 0;
-  writable_file_->GetPreallocationStatus(&block_size, &ignored);
+  // A successful aligned reservation also covers the Direct I/O tail page.
+  // Subtract before comparing so even oversized appends cannot wrap the end.
+  if (offset <= reserved_end_ && len <= reserved_end_ - offset) {
+    return IOStatus::OK();
+  }
   const uint64_t limit =
       static_cast<uint64_t>(std::numeric_limits<int64_t>::max());
-  const uint64_t alignment = writable_file_->GetRequiredBufferAlignment();
   auto align_up = [limit](uint64_t value, uint64_t unit,
                           uint64_t* result) -> bool {
     if (unit == 0 || value > limit) return false;
@@ -65,14 +67,21 @@ IOStatus WritableFileWriter::PrepareAppend(uint64_t offset, size_t len) {
     *result = value + extra;
     return true;
   };
-  uint64_t granularity = 0, end = 0;
-  if (block_size == 0 || !align_up(block_size, alignment, &granularity) ||
-      offset > limit || len > limit - offset ||
-      !align_up(offset + len, granularity, &end)) {
+  if (preallocation_granularity_ == 0) {
+    size_t block_size = 0, ignored = 0;
+    writable_file_->GetPreallocationStatus(&block_size, &ignored);
+    if (block_size == 0 ||
+        !align_up(block_size, buf_.Alignment(), &preallocation_granularity_)) {
+      return IOStatus::InvalidArgument(
+          "Preallocation range overflow or zero granularity");
+    }
+  }
+  uint64_t end = 0;
+  if (offset > limit || len > limit - offset ||
+      !align_up(offset + len, preallocation_granularity_, &end)) {
     return IOStatus::InvalidArgument(
         "Preallocation range overflow or zero granularity");
   }
-  if (end <= reserved_end_) return IOStatus::OK();
   // Every Direct I/O write (including padding) is covered by a prior aligned
   // reservation. Never restart allocation at a logical offset within that page.
   needs_final_truncate_ = true;
@@ -320,7 +329,10 @@ IOStatus WritableFileWriter::FinishAndClose(bool use_fsync) {
   IOStatus status = Seal();
   if (status.ok()) {
     // A final size change requires a real sync, including Direct I/O files.
-    status = SyncInternal(use_fsync);
+    const bool covered = use_fsync
+                             ? sealed_fsynced_.load(std::memory_order_acquire)
+                             : sealed_synced_.load(std::memory_order_acquire);
+    if (!covered) status = SyncInternal(use_fsync);
     if (status.ok()) {
       pending_sync_ = false;
       final_truncate_pending_sync_ = false;
@@ -525,6 +537,10 @@ IOStatus WritableFileWriter::SyncInternal(bool use_fsync) {
   }
 #endif
   SetPerfLevel(prev_perf_level);
+  if (s.ok() && sealed_) {
+    if (use_fsync) sealed_fsynced_.store(true, std::memory_order_release);
+    sealed_synced_.store(true, std::memory_order_release);
+  }
   return s;
 }
 

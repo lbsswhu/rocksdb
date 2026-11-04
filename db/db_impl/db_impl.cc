@@ -1056,7 +1056,7 @@ Status DBImpl::TablesRangeTombstoneSummary(ColumnFamilyHandle* column_family,
 void DBImpl::ScheduleBgLogWriterClose(JobContext* job_context) {
   if (!job_context->logs_to_free.empty()) {
     for (auto l : job_context->logs_to_free) {
-      AddToLogsToFreeQueue(l);
+      AddToLogsToFreeQueue(l, ShouldSyncWALClose(*job_context, l));
     }
     job_context->logs_to_free.clear();
   }
@@ -1564,11 +1564,13 @@ void DBImpl::BackgroundCallPurge() {
 
   while (!logs_to_free_queue_.empty()) {
     assert(!logs_to_free_queue_.empty());
-    log::Writer* log_writer = *(logs_to_free_queue_.begin());
+    const auto entry = logs_to_free_queue_.front();
+    log::Writer* log_writer = entry.first;
     logs_to_free_queue_.pop_front();
     mutex_.Unlock();
     if (log_writer->UsesZeroRangePreallocation()) {
-      IOStatus status = log_writer->Close(immutable_db_options_.use_fsync);
+      IOStatus status =
+          log_writer->Close(immutable_db_options_.use_fsync, entry.second);
       RecordWALFinalizationError(status);
     }
     delete log_writer;

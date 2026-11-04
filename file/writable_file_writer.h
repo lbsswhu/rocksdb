@@ -152,6 +152,12 @@ class WritableFileWriter {
   const bool zero_range_preallocation_;
   PreallocationSource preallocation_source_ = PreallocationSource::kOtherSst;
   uint64_t reserved_end_ = 0;
+  // File geometry is fixed before the first append; zero means not validated.
+  uint64_t preallocation_granularity_ = 0;
+  // Only successful syncs after sealing can cover the final size metadata.
+  // SyncWithoutFlush must not mutate append-owned pending_sync_ state.
+  std::atomic<bool> sealed_synced_{false};
+  std::atomic<bool> sealed_fsynced_{false};
   bool sealing_ = false;
   bool sealed_ = false;
   bool closed_ = false;

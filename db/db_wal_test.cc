@@ -7,7 +7,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 
+#include <map>
+#include <mutex>
+
 #include "db/db_test_util.h"
+#include "db/log_writer.h"
 #include "options/options_helper.h"
 #include "port/port.h"
 #include "port/stack_trace.h"
@@ -61,6 +65,239 @@ class DBWALTest : public DBWALTestBase {
  public:
   DBWALTest() : DBWALTestBase("/db_wal_test") {}
 };
+
+// Keep real POSIX behavior while observing each WAL independently of SST syncs.
+class WALCloseTrackingFS : public FileSystemWrapper {
+ public:
+  WALCloseTrackingFS() : FileSystemWrapper(Env::Default()->GetFileSystem()) {}
+  bool SupportsZeroRangePreallocation() const override {
+    return target()->SupportsZeroRangePreallocation();
+  }
+  void Reset() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    operations_.clear();
+  }
+  void Record(const std::string& name, const std::string& operation) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    operations_[name].push_back(operation);
+  }
+  std::vector<std::string> Operations(const std::string& name) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return operations_[name];
+  }
+  IOStatus NewWritableFile(const std::string& name, const FileOptions& options,
+                           std::unique_ptr<FSWritableFile>* result,
+                           IODebugContext* dbg) override {
+    auto status = target()->NewWritableFile(name, options, result, dbg);
+    if (status.ok() && name.size() >= 4 &&
+        name.compare(name.size() - 4, 4, ".log") == 0) {
+      class TrackedFile : public FSWritableFileOwnerWrapper {
+       public:
+        TrackedFile(std::unique_ptr<FSWritableFile>&& file,
+                    WALCloseTrackingFS* fs, std::string name)
+            : FSWritableFileOwnerWrapper(std::move(file)),
+              fs_(fs),
+              name_(name) {}
+        IOStatus Sync(const IOOptions& opts, IODebugContext* dbg) override {
+          fs_->Record(name_, "sync");
+          return target()->Sync(opts, dbg);
+        }
+        IOStatus Fsync(const IOOptions& opts, IODebugContext* dbg) override {
+          fs_->Record(name_, "sync");
+          return target()->Fsync(opts, dbg);
+        }
+        IOStatus Truncate(uint64_t size, const IOOptions& opts,
+                          IODebugContext* dbg) override {
+          fs_->Record(name_, "truncate");
+          return target()->Truncate(size, opts, dbg);
+        }
+        IOStatus Close(const IOOptions& opts, IODebugContext* dbg) override {
+          fs_->Record(name_, "close");
+          return target()->Close(opts, dbg);
+        }
+
+       private:
+        WALCloseTrackingFS* fs_;
+        std::string name_;
+      };
+      result->reset(new TrackedFile(std::move(*result), this, name));
+    }
+    return status;
+  }
+
+ private:
+  std::mutex mutex_;
+  std::map<std::string, std::vector<std::string>> operations_;
+};
+
+TEST_F(DBWALTest, ZeroRangeObsoleteWALClosePolicy) {
+  auto fs = std::make_shared<WALCloseTrackingFS>();
+  if (!fs->SupportsZeroRangePreallocation()) return;
+  auto test_env = NewCompositeEnv(fs);
+  const Options original = CurrentOptions();
+  for (bool archive : {false, true}) {
+    for (bool fsync : {false, true}) {
+      Options options = original;
+      options.env = test_env.get();
+      options.enable_zero_range_preallocation = true;
+      options.WAL_ttl_seconds = archive ? 3600 : 0;
+      options.use_fsync = fsync;
+      DestroyAndReopen(options);
+      fs->Reset();
+      ASSERT_OK(Put("old", "value"));
+      const uint64_t old_log = dbfull()->TEST_LogfileNumber();
+      const auto old_path = LogFileName(dbname_, old_log);
+      ASSERT_OK(Flush());
+      ASSERT_OK(dbfull()->TEST_WaitForFlushMemTable());
+      // Waiting for the job also waits for obsolete-file cleanup.
+      const auto operations = fs->Operations(old_path);
+      ASSERT_NE(operations.end(),
+                std::find(operations.begin(), operations.end(), "truncate"));
+      ASSERT_NE(operations.end(),
+                std::find(operations.begin(), operations.end(), "close"));
+      EXPECT_EQ(archive ? 1 : 0,
+                std::count(operations.begin(), operations.end(), "sync"));
+      ASSERT_NOK(options.env->FileExists(old_path));
+      if (archive) {
+        ASSERT_OK(
+            options.env->FileExists(ArchivedLogFileName(dbname_, old_log)));
+      }
+      ASSERT_OK(Put("active", "value"));
+      const auto active_path =
+          LogFileName(dbname_, dbfull()->TEST_LogfileNumber());
+      ASSERT_OK(db_->Close());
+      const auto active_operations = fs->Operations(active_path);
+      EXPECT_EQ(1, std::count(active_operations.begin(),
+                              active_operations.end(), "sync"));
+      Reopen(options);
+      ASSERT_EQ("value", Get("old"));
+      ASSERT_EQ("value", Get("active"));
+    }
+  }
+  DestroyAndReopen(original);
+}
+
+TEST_F(DBWALTest, ZeroRangeSyncedRetainedWALDoesNotSyncAgainOnClose) {
+  auto fs = std::make_shared<WALCloseTrackingFS>();
+  if (!fs->SupportsZeroRangePreallocation()) return;
+  auto test_env = NewCompositeEnv(fs);
+  const Options original = CurrentOptions();
+  Options options = original;
+  options.env = test_env.get();
+  options.enable_zero_range_preallocation = true;
+  DestroyAndReopen(options);
+  ASSERT_OK(db_->DisableFileDeletions());
+  ASSERT_OK(Put("old", "value"));
+  const auto old_path = LogFileName(dbname_, dbfull()->TEST_LogfileNumber());
+  ASSERT_OK(Flush());
+  ASSERT_OK(db_->SyncWAL());
+  auto operations = fs->Operations(old_path);
+  EXPECT_EQ(1, std::count(operations.begin(), operations.end(), "sync"));
+  ASSERT_OK(db_->Close());
+  operations = fs->Operations(old_path);
+  EXPECT_EQ(1, std::count(operations.begin(), operations.end(), "sync"));
+  ASSERT_NE(operations.end(),
+            std::find(operations.begin(), operations.end(), "close"));
+  ASSERT_OK(options.env->FileExists(old_path));
+  Reopen(options);
+  ASSERT_EQ("value", Get("old"));
+  DestroyAndReopen(original);
+}
+
+TEST_F(DBWALTest, ZeroRangeRetiredWALStillNeededByAnotherColumnFamily) {
+  auto fs = std::make_shared<WALCloseTrackingFS>();
+  if (!fs->SupportsZeroRangePreallocation()) return;
+  auto test_env = NewCompositeEnv(fs);
+  const Options original = CurrentOptions();
+  for (bool manual : {false, true}) {
+    for (bool two_queues : {false, true}) {
+      Options options = original;
+      options.env = test_env.get();
+      options.enable_zero_range_preallocation = true;
+      options.manual_wal_flush = manual;
+      options.two_write_queues = two_queues;
+      DestroyAndReopen(options);
+      CreateAndReopenWithCF({"cold"}, options);
+      fs->Reset();
+      ASSERT_OK(Put(1, "cold", "not flushed"));
+      ASSERT_OK(Put(0, "hot", "flushed"));
+      const auto old_path =
+          LogFileName(dbname_, dbfull()->TEST_LogfileNumber());
+      ASSERT_OK(Flush(0));
+      ASSERT_OK(db_->SyncWAL());
+      // SyncWAL can retire this writer, but the unflushed cold CF still needs
+      // the WAL for crash recovery. No deletion-disabled shortcut is involved.
+      ASSERT_OK(options.env->FileExists(old_path));
+      for (auto* handle : handles_) delete handle;
+      handles_.clear();
+      ASSERT_OK(db_->Close());
+      auto operations = fs->Operations(old_path);
+      EXPECT_EQ(1, std::count(operations.begin(), operations.end(), "sync"));
+      EXPECT_EQ(1, std::count(operations.begin(), operations.end(), "close"));
+      ASSERT_OK(options.env->FileExists(old_path));
+      ReopenWithColumnFamilies({kDefaultColumnFamilyName, "cold"}, options);
+      ASSERT_EQ("not flushed", Get(1, "cold"));
+      ASSERT_EQ("flushed", Get(0, "hot"));
+    }
+  }
+  DestroyAndReopen(original);
+}
+
+TEST_F(DBWALTest, ZeroRangeBackgroundCloseCarriesDeletionPolicy) {
+  auto fs = std::make_shared<WALCloseTrackingFS>();
+  if (!fs->SupportsZeroRangePreallocation()) return;
+  auto test_env = NewCompositeEnv(fs);
+  const Options original = CurrentOptions();
+  for (bool obsolete : {false, true}) {
+    Options options = original;
+    options.env = test_env.get();
+    options.enable_zero_range_preallocation = true;
+    DestroyAndReopen(options);
+    fs->Reset();
+    // An isolated retired writer lets this test control which cleanup snapshot
+    // owns it, independently of flush-job timing.
+    const uint64_t number = 1000000;
+    const auto path = LogFileName(dbname_, number);
+    FileOptions file_options;
+    file_options.preallocation_mode = PreallocationMode::kZeroRange;
+    std::unique_ptr<FSWritableFile> file;
+    ASSERT_OK(fs->NewWritableFile(path, file_options, &file, nullptr));
+    file->SetPreallocationBlockSize(4096);
+    std::unique_ptr<WritableFileWriter> dest(
+        new WritableFileWriter(std::move(file), path, file_options));
+    auto* writer = new log::Writer(std::move(dest), number, false);
+    ASSERT_OK(writer->AddRecord("retired WAL"));
+    ASSERT_OK(writer->Seal());
+    JobContext job(0);
+    job.log_number = number + 1;
+    job.log_delete_files.push_back(number);
+    EXPECT_FALSE(dbfull()->ShouldSyncWALClose(job, writer));
+    job.prev_log_number = number;
+    EXPECT_TRUE(dbfull()->ShouldSyncWALClose(job, writer));
+    job.prev_log_number = 0;
+    job.log_recycle_files.push_back(number);
+    EXPECT_TRUE(dbfull()->ShouldSyncWALClose(job, writer));
+    job.log_recycle_files.clear();
+    job.log_number = number;
+    EXPECT_TRUE(dbfull()->ShouldSyncWALClose(job, writer));
+    job.log_number = number + 1;
+    if (!obsolete) job.log_delete_files.clear();
+    job.logs_to_free.push_back(writer);
+    {
+      InstrumentedMutexLock lock(dbfull()->mutex());
+      dbfull()->ScheduleBgLogWriterClose(&job);
+      dbfull()->SchedulePurge();
+    }
+    // Close waits for the scheduled background purge to release the writer.
+    ASSERT_OK(db_->Close());
+    auto operations = fs->Operations(path);
+    EXPECT_EQ(obsolete ? 0 : 1,
+              std::count(operations.begin(), operations.end(), "sync"));
+    EXPECT_EQ(1, std::count(operations.begin(), operations.end(), "close"));
+    job.Clean();
+  }
+  DestroyAndReopen(original);
+}
 
 TEST_F(DBWALTest, ZeroRangeWALPublicationAndSealing) {
   for (bool manual_flush : {false, true}) {
