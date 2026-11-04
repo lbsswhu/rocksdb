@@ -219,6 +219,8 @@ class PosixWritableFile : public FSWritableFile {
   int fd_;
   uint64_t filesize_;
   size_t logical_sector_size_;
+  PreallocationMode preallocation_mode_;
+  bool needs_final_truncate_ = false;
 #ifdef ROCKSDB_FALLOCATE_PRESENT
   bool allow_fallocate_;
   bool fallocate_with_keep_size_;
@@ -234,6 +236,10 @@ class PosixWritableFile : public FSWritableFile {
                              size_t logical_block_size,
                              const EnvOptions& options);
   virtual ~PosixWritableFile();
+
+  PreallocationMode GetPreallocationMode() const override {
+    return preallocation_mode_;
+  }
 
   // Need to implement this so the file is truncated correctly
   // with direct I/O

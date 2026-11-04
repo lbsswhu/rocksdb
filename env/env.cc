@@ -517,11 +517,15 @@ class LegacyFileSystemWrapper : public FileSystem {
 
   FileOptions OptimizeForLogRead(
       const FileOptions& file_options) const override {
-    return target_->OptimizeForLogRead(file_options);
+    FileOptions result(target_->OptimizeForLogRead(file_options));
+    result.disable_stdio_buffering = file_options.disable_stdio_buffering;
+    return result;
   }
   FileOptions OptimizeForManifestRead(
       const FileOptions& file_options) const override {
-    return target_->OptimizeForManifestRead(file_options);
+    FileOptions result(target_->OptimizeForManifestRead(file_options));
+    result.disable_stdio_buffering = file_options.disable_stdio_buffering;
+    return result;
   }
   FileOptions OptimizeForLogWrite(const FileOptions& file_options,
                                   const DBOptions& db_options) const override {
@@ -540,12 +544,18 @@ class LegacyFileSystemWrapper : public FileSystem {
   FileOptions OptimizeForCompactionTableRead(
       const FileOptions& file_options,
       const ImmutableDBOptions& db_options) const override {
-    return target_->OptimizeForCompactionTableRead(file_options, db_options);
+    FileOptions result(
+        target_->OptimizeForCompactionTableRead(file_options, db_options));
+    result.disable_stdio_buffering = file_options.disable_stdio_buffering;
+    return result;
   }
   FileOptions OptimizeForBlobFileRead(
       const FileOptions& file_options,
       const ImmutableDBOptions& db_options) const override {
-    return target_->OptimizeForBlobFileRead(file_options, db_options);
+    FileOptions result(
+        target_->OptimizeForBlobFileRead(file_options, db_options));
+    result.disable_stdio_buffering = file_options.disable_stdio_buffering;
+    return result;
   }
 
 #ifdef GetFreeSpace

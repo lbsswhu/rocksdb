@@ -1410,8 +1410,8 @@ class DBImpl : public DB {
       writer = nullptr;
       return w;
     }
-    Status ClearWriter() {
-      Status s = writer->WriteBuffer();
+    Status ClearWriter(bool use_fsync = false) {
+      Status s = writer->Close(use_fsync);
       delete writer;
       writer = nullptr;
       return s;
@@ -1423,6 +1423,9 @@ class DBImpl : public DB {
     log::Writer* writer;  // own
     // true for some prefix of logs_
     bool getting_synced = false;
+    // Complete-record boundary captured before this sync operation starts.
+    // Protected by the same getting_synced ownership as the sync itself.
+    uint64_t synced_size_snapshot = 0;
   };
 
   // PurgeFileInfo is a structure to hold information of files to be deleted in
@@ -1829,6 +1832,8 @@ class DBImpl : public DB {
 
   // helper function to call after some of the logs_ were synced
   Status MarkLogsSynced(uint64_t up_to, bool synced_dir);
+  // Called without mutex_; preserves asynchronous WAL close failures for Close.
+  void RecordWALFinalizationError(const IOStatus& status);
   // WALs with log number up to up_to are not synced successfully.
   void MarkLogsNotSynced(uint64_t up_to);
 
@@ -2052,6 +2057,7 @@ class DBImpl : public DB {
   std::deque<LogWriterNumber> logs_;
   // Signaled when getting_synced becomes false for some of the logs_.
   InstrumentedCondVar log_sync_cv_;
+  Status wal_finalization_status_;  // First deferred close error; mutex_.
   // This is the app-level state that is written to the WAL but will be used
   // only during recovery. Using this feature enables not writing the state to
   // memtable on normal writes and hence improving the throughput. Each new

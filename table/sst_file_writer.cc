@@ -9,6 +9,7 @@
 
 #include "db/db_impl/db_impl.h"
 #include "db/dbformat.h"
+#include "file/preallocation.h"
 #include "file/writable_file_writer.h"
 #include "rocksdb/file_system.h"
 #include "rocksdb/table.h"
@@ -224,9 +225,20 @@ Status SstFileWriter::Open(const std::string& file_path) {
   Status s;
   std::unique_ptr<FSWritableFile> sst_file;
   FileOptions cur_file_opts(r->env_options);
+  ConfigureZeroRangePreallocation(r->ioptions.env->GetFileSystem().get(),
+                                  r->ioptions.enable_zero_range_preallocation,
+                                  &cur_file_opts);
   s = r->ioptions.env->GetFileSystem()->NewWritableFile(
       file_path, cur_file_opts, &sst_file, nullptr);
   if (!s.ok()) {
+    return s;
+  }
+
+  s = SetSstPreallocationBlockSize(sst_file.get(),
+                                   r->mutable_cf_options.write_buffer_size);
+  if (!s.ok()) {
+    sst_file->Close(IOOptions(), nullptr).PermitUncheckedError();
+    r->ioptions.env->DeleteFile(file_path).PermitUncheckedError();
     return s;
   }
 
@@ -296,8 +308,8 @@ Status SstFileWriter::Open(const std::string& file_path) {
   table_builder_options.skip_filters = r->skip_filters;
   FileTypeSet tmp_set = r->ioptions.checksum_handoff_file_types;
   r->file_writer.reset(new WritableFileWriter(
-      std::move(sst_file), file_path, r->env_options, r->ioptions.clock,
-      nullptr /* io_tracer */, nullptr /* stats */, r->ioptions.listeners,
+      std::move(sst_file), file_path, cur_file_opts, r->ioptions.clock,
+      nullptr /* io_tracer */, r->ioptions.stats, r->ioptions.listeners,
       r->ioptions.file_checksum_gen_factory.get(),
       tmp_set.Contains(FileType::kTableFile), false));
 
@@ -357,11 +369,14 @@ Status SstFileWriter::Finish(ExternalSstFileInfo* file_info) {
   r->file_info.file_size = r->builder->FileSize();
 
   if (s.ok()) {
-    s = r->file_writer->Sync(r->ioptions.use_fsync);
+    s = r->file_writer->Seal();
     r->InvalidatePageCache(true /* closing */).PermitUncheckedError();
     if (s.ok()) {
-      s = r->file_writer->Close();
+      s = r->file_writer->FinishAndClose(r->ioptions.use_fsync);
     }
+  }
+  if (!s.ok()) {
+    r->file_writer->Close().PermitUncheckedError();
   }
   if (s.ok()) {
     r->file_info.file_checksum = r->file_writer->GetFileChecksum();

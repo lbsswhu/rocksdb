@@ -4,6 +4,7 @@
 //  (found in the LICENSE.Apache file in the root directory).
 //
 #include <algorithm>
+#include <limits>
 #include <vector>
 
 #include "db/db_test_util.h"
@@ -24,6 +25,229 @@
 namespace ROCKSDB_NAMESPACE {
 
 class WritableFileWriterTest : public testing::Test {};
+
+struct ReservationState {
+  std::string data;
+  std::vector<std::pair<uint64_t, uint64_t>> allocations;
+  std::vector<std::string> operations;
+  bool fail_allocate = false;
+  bool fail_truncate = false;
+  bool fail_write = false;
+  bool fail_sync = false;
+  bool fail_close = false;
+};
+
+class ReservationFile : public FSWritableFile {
+ public:
+  using FSWritableFile::Append;
+  using FSWritableFile::PositionedAppend;
+  ReservationFile(ReservationState* state, bool direct = false)
+      : state_(state), direct_(direct) {
+    SetPreallocationBlockSize(513);
+  }
+  PreallocationMode GetPreallocationMode() const override {
+    return PreallocationMode::kZeroRange;
+  }
+  bool use_direct_io() const override { return direct_; }
+  size_t GetRequiredBufferAlignment() const override { return 512; }
+  IOStatus Allocate(uint64_t offset, uint64_t len, const IOOptions&,
+                    IODebugContext*) override {
+    state_->allocations.emplace_back(offset, len);
+    if (state_->fail_allocate) return IOStatus::NoSpace("allocation");
+    EXPECT_GE(offset, state_->data.size());
+    return IOStatus::OK();
+  }
+  IOStatus Append(const Slice& data, const IOOptions&,
+                  IODebugContext*) override {
+    state_->operations.push_back("write");
+    if (state_->fail_write) return IOStatus::IOError("write");
+    state_->data.append(data.data(), data.size());
+    return IOStatus::OK();
+  }
+  IOStatus PositionedAppend(const Slice& data, uint64_t offset,
+                            const IOOptions&, IODebugContext*) override {
+    state_->operations.push_back("write");
+    state_->data.resize(offset);
+    state_->data.append(data.data(), data.size());
+    return IOStatus::OK();
+  }
+  IOStatus Truncate(uint64_t size, const IOOptions&, IODebugContext*) override {
+    state_->operations.push_back("truncate");
+    if (state_->fail_truncate) return IOStatus::IOError("truncate");
+    state_->data.resize(size);
+    return IOStatus::OK();
+  }
+  IOStatus Flush(const IOOptions&, IODebugContext*) override {
+    state_->operations.push_back("flush");
+    return IOStatus::OK();
+  }
+  IOStatus Sync(const IOOptions&, IODebugContext*) override {
+    state_->operations.push_back("sync");
+    if (state_->fail_sync) return IOStatus::IOError("sync");
+    return IOStatus::OK();
+  }
+  IOStatus Fsync(const IOOptions&, IODebugContext*) override {
+    state_->operations.push_back("fsync");
+    return IOStatus::OK();
+  }
+  IOStatus Close(const IOOptions&, IODebugContext*) override {
+    state_->operations.push_back("close");
+    if (state_->fail_close) return IOStatus::IOError("close");
+    return IOStatus::OK();
+  }
+
+ private:
+  ReservationState* state_;
+  bool direct_;
+};
+
+TEST_F(WritableFileWriterTest, ZeroRangeReservationAndSeal) {
+  ReservationState state;
+  std::unique_ptr<FSWritableFile> file(new ReservationFile(&state));
+  WritableFileWriter writer(std::move(file), "reservation", FileOptions());
+  ASSERT_OK(writer.Append("abc"));
+  ASSERT_EQ(1u, state.allocations.size());
+  EXPECT_EQ(std::make_pair(uint64_t(0), uint64_t(1024)), state.allocations[0]);
+  ASSERT_OK(writer.Seal());
+  ASSERT_EQ("abc", state.data);
+  auto operations = state.operations;
+  ASSERT_OK(writer.Flush());
+  ASSERT_OK(writer.Seal());
+  EXPECT_EQ(operations, state.operations);
+  EXPECT_TRUE(writer.Append("x").IsInvalidArgument());
+  ASSERT_OK(writer.FinishAndClose(false));
+  ASSERT_EQ("sync", state.operations[state.operations.size() - 2]);
+  ASSERT_EQ("close", state.operations.back());
+  operations = state.operations;
+  ASSERT_OK(writer.Close());
+  EXPECT_EQ(operations, state.operations);
+}
+
+TEST_F(WritableFileWriterTest, ZeroRangeAllocationFailureRetained) {
+  ReservationState state;
+  state.fail_allocate = true;
+  std::unique_ptr<FSWritableFile> file(new ReservationFile(&state));
+  WritableFileWriter writer(std::move(file), "reservation", FileOptions());
+  EXPECT_TRUE(writer.Append("abc").IsNoSpace());
+  EXPECT_EQ(0u, writer.GetFileSize());
+  EXPECT_TRUE(state.data.empty());
+  EXPECT_TRUE(writer.Close().IsNoSpace());
+  EXPECT_TRUE(writer.Close().IsNoSpace());
+  ASSERT_EQ(std::vector<std::string>({"close"}), state.operations);
+}
+
+TEST_F(WritableFileWriterTest, ZeroRangeTruncateFailureStillCloses) {
+  ReservationState state;
+  state.fail_truncate = true;
+  std::unique_ptr<FSWritableFile> file(new ReservationFile(&state));
+  WritableFileWriter writer(std::move(file), "reservation", FileOptions());
+  ASSERT_OK(writer.Append("abc"));
+  EXPECT_TRUE(writer.FinishAndClose(true).IsIOError());
+  EXPECT_EQ("close", state.operations.back());
+  EXPECT_EQ(
+      0, std::count(state.operations.begin(), state.operations.end(), "fsync"));
+  EXPECT_TRUE(writer.Close().IsIOError());
+}
+
+TEST_F(WritableFileWriterTest, ZeroRangeFlushFailureDoesNotExtendLogicalTail) {
+  ReservationState state;
+  state.fail_write = true;
+  std::unique_ptr<FSWritableFile> file(new ReservationFile(&state));
+  WritableFileWriter writer(std::move(file), "reservation", FileOptions());
+  ASSERT_OK(writer.Append("abc"));
+  EXPECT_TRUE(writer.FinishAndClose(true).IsIOError());
+  EXPECT_TRUE(state.data.empty());
+  EXPECT_EQ(std::vector<std::string>({"write", "close"}), state.operations);
+}
+
+TEST_F(WritableFileWriterTest, ZeroRangeFinalSyncRetainsFirstError) {
+  ReservationState state;
+  state.fail_sync = state.fail_close = true;
+  std::unique_ptr<FSWritableFile> file(new ReservationFile(&state));
+  WritableFileWriter writer(std::move(file), "reservation", FileOptions());
+  ASSERT_OK(writer.Append("abc"));
+  IOStatus status = writer.FinishAndClose(false);
+  EXPECT_TRUE(status.IsIOError());
+  EXPECT_NE(std::string::npos, status.ToString().find("sync"));
+  EXPECT_EQ(status, writer.Close());
+  EXPECT_EQ("close", state.operations.back());
+}
+
+TEST_F(WritableFileWriterTest, ZeroRangeOverflowAndZeroGranularity) {
+  for (size_t block_size : {size_t(0), std::numeric_limits<size_t>::max()}) {
+    ReservationState state;
+    std::unique_ptr<FSWritableFile> file(new ReservationFile(&state));
+    file->SetPreallocationBlockSize(block_size);
+    WritableFileWriter writer(std::move(file), "reservation", FileOptions());
+    EXPECT_TRUE(writer.Append("abc").IsInvalidArgument());
+    EXPECT_TRUE(state.allocations.empty());
+    EXPECT_TRUE(writer.Close().IsInvalidArgument());
+  }
+}
+
+TEST_F(WritableFileWriterTest, FileOptionsPreserveBoundedReads) {
+  FileOptions options;
+  EXPECT_FALSE(options.disable_stdio_buffering);
+  EXPECT_EQ(PreallocationMode::kLegacy, options.preallocation_mode);
+  options.disable_stdio_buffering = true;
+  options.preallocation_mode = PreallocationMode::kZeroRange;
+  FileOptions copy(options);
+  EXPECT_TRUE(copy.disable_stdio_buffering);
+  EXPECT_EQ(PreallocationMode::kZeroRange, copy.preallocation_mode);
+  copy = options;
+  EXPECT_TRUE(copy.disable_stdio_buffering);
+  EXPECT_TRUE(Env::Default()
+                  ->GetFileSystem()
+                  ->OptimizeForLogRead(copy)
+                  .disable_stdio_buffering);
+}
+
+TEST_F(WritableFileWriterTest, UnbufferedSequentialReadSeesPublishedBytes) {
+  auto fs = Env::Default()->GetFileSystem();
+  std::string directory;
+  ASSERT_OK(fs->GetTestDirectory(IOOptions(), &directory, nullptr));
+  const std::string path = directory + "/bounded-stdio-read";
+  FileOptions options;
+  options.use_mmap_writes = false;
+  options.disable_stdio_buffering = true;
+  std::unique_ptr<FSWritableFile> writer;
+  ASSERT_OK(fs->NewWritableFile(path, options, &writer, nullptr));
+  ASSERT_OK(writer->Append("abc000", IOOptions(), nullptr));
+  std::unique_ptr<FSSequentialFile> reader;
+  ASSERT_OK(fs->NewSequentialFile(path, options, &reader, nullptr));
+  char scratch[3];
+  Slice result;
+  ASSERT_OK(reader->Read(3, IOOptions(), &result, scratch, nullptr));
+  ASSERT_EQ("abc", result.ToString());
+  ASSERT_OK(writer->PositionedAppend("def", 3, IOOptions(), nullptr));
+  ASSERT_OK(reader->Read(3, IOOptions(), &result, scratch, nullptr));
+  ASSERT_EQ("def", result.ToString());
+  reader.reset();
+  ASSERT_OK(writer->Close(IOOptions(), nullptr));
+  ASSERT_OK(fs->DeleteFile(path, IOOptions(), nullptr));
+}
+
+#ifndef ROCKSDB_LITE
+TEST_F(WritableFileWriterTest, ZeroRangeDirectTailIsNotWrittenAfterSeal) {
+  ReservationState state;
+  std::unique_ptr<FSWritableFile> file(new ReservationFile(&state, true));
+  WritableFileWriter writer(std::move(file), "reservation", FileOptions());
+  ASSERT_OK(writer.Append("abc"));
+  ASSERT_OK(writer.Flush());
+  ASSERT_EQ(512u, state.data.size());
+  ASSERT_OK(writer.Append(std::string(1500, 'x')));
+  ASSERT_EQ(std::make_pair(uint64_t(1024), uint64_t(1024)),
+            state.allocations.back());
+  ASSERT_OK(writer.Seal());
+  EXPECT_EQ("abc" + std::string(1500, 'x'), state.data);
+  int writes =
+      std::count(state.operations.begin(), state.operations.end(), "write");
+  ASSERT_OK(writer.FinishAndClose(true));
+  EXPECT_EQ(writes, std::count(state.operations.begin(), state.operations.end(),
+                               "write"));
+  EXPECT_EQ("fsync", state.operations[state.operations.size() - 2]);
+}
+#endif
 
 const uint32_t kMb = 1 << 20;
 

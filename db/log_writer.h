@@ -12,6 +12,7 @@
 #include <memory>
 
 #include "db/log_format.h"
+#include "db/wal_read_boundary.h"
 #include "rocksdb/io_status.h"
 #include "rocksdb/slice.h"
 #include "rocksdb/status.h"
@@ -72,7 +73,8 @@ class Writer {
   // "*dest" must remain live while this Writer is in use.
   explicit Writer(std::unique_ptr<WritableFileWriter>&& dest,
                   uint64_t log_number, bool recycle_log_files,
-                  bool manual_flush = false);
+                  bool manual_flush = false,
+                  std::shared_ptr<WalReadBoundary> read_boundary = nullptr);
   // No copying allowed
   Writer(const Writer&) = delete;
   void operator=(const Writer&) = delete;
@@ -88,13 +90,21 @@ class Writer {
 
   IOStatus WriteBuffer();
 
-  IOStatus Close();
+  // Stop appending and trim reserved space without changing the sync policy.
+  IOStatus Seal();
+  IOStatus Close(bool use_fsync = false);
+
+  uint64_t ReadableEnd() const {
+    return readable_end_.load(std::memory_order_acquire);
+  }
+  bool UsesZeroRangePreallocation() const;
+  bool IsSealed() const;
 
   bool TEST_BufferIsEmpty();
 
  private:
   std::unique_ptr<WritableFileWriter> dest_;
-  size_t block_offset_;       // Current offset in block
+  size_t block_offset_;  // Current offset in block
   uint64_t log_number_;
   bool recycle_log_files_;
 
@@ -108,6 +118,10 @@ class Writer {
   // If true, it does not flush after each write. Instead it relies on the upper
   // layer to manually does the flush by calling ::WriteBuffer()
   bool manual_flush_;
+  uint64_t pending_complete_end_ = 0;
+  std::atomic<uint64_t> readable_end_{0};
+  std::shared_ptr<WalReadBoundary> read_boundary_;
+  bool write_error_ = false;
 };
 
 }  // namespace log

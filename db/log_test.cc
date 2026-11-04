@@ -9,6 +9,7 @@
 
 #include "db/log_reader.h"
 #include "db/log_writer.h"
+#include "db/wal_read_boundary.h"
 #include "file/sequence_file_reader.h"
 #include "file/writable_file_writer.h"
 #include "rocksdb/env.h"
@@ -42,6 +43,62 @@ static std::string NumberString(int n) {
 // Return a skewed potentially long string
 static std::string RandomSkewedString(int i, Random* rnd) {
   return BigString(NumberString(i), rnd->Skewed(17));
+}
+
+// Param type is tuple<int, bool>
+TEST(LogWriterBoundaryTest, ManualAndAutomaticPublication) {
+  for (bool manual : {false, true}) {
+    auto boundary = std::make_shared<WalReadBoundary>();
+    std::unique_ptr<FSWritableFile> sink(new test::StringSink());
+    std::unique_ptr<WritableFileWriter> file(new WritableFileWriter(
+        std::move(sink), "boundary-test", FileOptions()));
+    Writer writer(std::move(file), 1, false, manual, boundary);
+    ASSERT_OK(writer.AddRecord(BigString("fragmented", 3 * kBlockSize)));
+    const uint64_t end = writer.file()->GetFileSize();
+    ASSERT_GT(end, 3 * kBlockSize);
+    ASSERT_EQ(manual ? 0 : end, boundary->readable_end.load());
+    ASSERT_OK(writer.WriteBuffer());
+    ASSERT_EQ(end, boundary->readable_end.load());
+    ASSERT_OK(writer.Seal());
+    ASSERT_TRUE(boundary->sealed.load());
+    ASSERT_OK(writer.Close());
+    ASSERT_EQ(end, boundary->readable_end.load());
+  }
+}
+
+TEST(LogWriterBoundaryTest, FailedRecordDoesNotPublish) {
+  class FailingSink : public test::StringSink {
+   public:
+    using test::StringSink::Append;
+    bool fail_append = false;
+    bool fail_flush = false;
+    IOStatus Append(const Slice& data, const IOOptions& opts,
+                    IODebugContext* dbg) override {
+      if (fail_append) return IOStatus::IOError("injected append failure");
+      return test::StringSink::Append(data, opts, dbg);
+    }
+    IOStatus Flush(const IOOptions& opts, IODebugContext* dbg) override {
+      if (fail_flush) return IOStatus::IOError("injected flush failure");
+      return test::StringSink::Flush(opts, dbg);
+    }
+  };
+  for (bool fail_append : {false, true}) {
+    auto boundary = std::make_shared<WalReadBoundary>();
+    auto* sink = new FailingSink();
+    std::unique_ptr<FSWritableFile> sink_holder(sink);
+    std::unique_ptr<WritableFileWriter> file(new WritableFileWriter(
+        std::move(sink_holder), "boundary-failure-test", FileOptions()));
+    Writer writer(std::move(file), 1, false, false, boundary);
+    ASSERT_OK(writer.AddRecord("complete"));
+    const uint64_t end = boundary->readable_end.load();
+    ASSERT_GT(end, 0);
+    sink->fail_append = fail_append;
+    sink->fail_flush = !fail_append;
+    ASSERT_NOK(writer.AddRecord(BigString("incomplete", 3 * kBlockSize)));
+    ASSERT_EQ(end, boundary->readable_end.load());
+    ASSERT_NOK(writer.Close());
+    ASSERT_EQ(end, boundary->readable_end.load());
+  }
 }
 
 // Param type is tuple<int, bool>
@@ -681,6 +738,196 @@ INSTANTIATE_TEST_CASE_P(bool, LogTest,
                                           std::make_tuple(0, true),
                                           std::make_tuple(1, false),
                                           std::make_tuple(1, true)));
+
+// Static WAL recovery must validate zero tails independently of the physical
+// read cursor, while keeping the existing recovery-mode corruption policy.
+class WalZeroTailTest : public ::testing::Test {
+ public:
+  class Source : public FSSequentialFile {
+   public:
+    explicit Source(const std::string& data) : data_(data), position_(0) {}
+    IOStatus Read(size_t n, const IOOptions&, Slice* out, char* scratch,
+                  IODebugContext*) override {
+      n = std::min(n, data_.size() - position_);
+      memcpy(scratch, data_.data() + position_, n);
+      position_ += n;
+      *out = Slice(scratch, n);
+      return IOStatus::OK();
+    }
+    IOStatus Skip(uint64_t n) override {
+      position_ +=
+          static_cast<size_t>(std::min<uint64_t>(n, data_.size() - position_));
+      return IOStatus::OK();
+    }
+
+   private:
+    const std::string data_;
+    size_t position_;
+  };
+  struct Reporter : public Reader::Reporter {
+    std::string errors;
+    void Corruption(size_t, const Status& s) override {
+      errors += s.ToString();
+    }
+  };
+  static std::string Physical(RecordType type, const std::string& payload) {
+    std::string data(kHeaderSize, '\0');
+    data[4] = static_cast<char>(payload.size() & 0xff);
+    data[5] = static_cast<char>(payload.size() >> 8);
+    data[6] = static_cast<char>(type);
+    data += payload;
+    EncodeFixed32(&data[0], crc32c::Mask(crc32c::Value(data.data() + 6,
+                                                       payload.size() + 1)));
+    return data;
+  }
+  static std::unique_ptr<Reader> Open(const std::string& data,
+                                      Reporter* reporter) {
+    std::unique_ptr<FSSequentialFile> source(new Source(data));
+    std::unique_ptr<SequentialFileReader> file(
+        new SequentialFileReader(std::move(source), "static-wal"));
+    return std::unique_ptr<Reader>(
+        new Reader(nullptr, std::move(file), reporter, true, 0, true));
+  }
+};
+
+TEST_F(WalZeroTailTest, CompleteEndSurvivesValidatedZeroTail) {
+  const std::string record = Physical(kFullType, "valid");
+  for (auto mode : {WALRecoveryMode::kAbsoluteConsistency,
+                    WALRecoveryMode::kPointInTimeRecovery,
+                    WALRecoveryMode::kTolerateCorruptedTailRecords,
+                    WALRecoveryMode::kSkipAnyCorruptedRecords}) {
+    for (size_t tail :
+         {size_t(1), size_t(6), size_t(7), size_t(kBlockSize * 3 + 3)}) {
+      Reporter reporter;
+      auto reader = Open(record + std::string(tail, '\0'), &reporter);
+      Slice result;
+      std::string scratch;
+      ASSERT_TRUE(reader->ReadRecord(&result, &scratch, mode));
+      ASSERT_EQ("valid", result.ToString());
+      ASSERT_EQ(record.size(), reader->LastRecordEnd());
+      ASSERT_FALSE(reader->ReadRecord(&result, &scratch, mode));
+      ASSERT_EQ(record.size(), reader->LastRecordEnd());
+      ASSERT_TRUE(reporter.errors.empty()) << reporter.errors;
+    }
+  }
+}
+
+TEST_F(WalZeroTailTest, ZeroTailPreservesIncompleteFragmentCorruption) {
+  const std::string record = Physical(kFullType, "valid");
+  const std::string first = Physical(kFirstType, "unfinished");
+  for (auto mode : {WALRecoveryMode::kAbsoluteConsistency,
+                    WALRecoveryMode::kPointInTimeRecovery,
+                    WALRecoveryMode::kTolerateCorruptedTailRecords,
+                    WALRecoveryMode::kSkipAnyCorruptedRecords}) {
+    Reporter reporter;
+    auto reader =
+        Open(record + first + std::string(kBlockSize * 2, '\0'), &reporter);
+    Slice result;
+    std::string scratch;
+    ASSERT_TRUE(reader->ReadRecord(&result, &scratch, mode));
+    ASSERT_FALSE(reader->ReadRecord(&result, &scratch, mode));
+    ASSERT_EQ(record.size(), reader->LastRecordEnd());
+    ASSERT_NE(std::string::npos,
+              reporter.errors.find("error in middle of record"));
+  }
+}
+
+TEST_F(WalZeroTailTest, ZeroTailDoesNotHideChecksumCorruption) {
+  std::string record = Physical(kFullType, "corrupt");
+  record[kHeaderSize] ^= 1;
+  Reporter reporter;
+  auto reader = Open(record + std::string(kBlockSize * 2, '\0'), &reporter);
+  Slice result;
+  std::string scratch;
+  ASSERT_FALSE(reader->ReadRecord(&result, &scratch,
+                                  WALRecoveryMode::kAbsoluteConsistency));
+  ASSERT_NE(std::string::npos, reporter.errors.find("checksum mismatch"));
+  ASSERT_EQ(0U, reader->LastRecordEnd());
+}
+
+TEST_F(WalZeroTailTest, ZeroTailDoesNotHideLengthCorruption) {
+  std::string record = Physical(kFullType, "corrupt");
+  record[4] = static_cast<char>(0xff);
+  record[5] = static_cast<char>(0xff);
+  for (auto mode : {WALRecoveryMode::kAbsoluteConsistency,
+                    WALRecoveryMode::kPointInTimeRecovery,
+                    WALRecoveryMode::kTolerateCorruptedTailRecords,
+                    WALRecoveryMode::kSkipAnyCorruptedRecords}) {
+    Reporter reporter;
+    auto reader = Open(record + std::string(kBlockSize * 2, '\0'), &reporter);
+    Slice result;
+    std::string scratch;
+    ASSERT_FALSE(reader->ReadRecord(&result, &scratch, mode));
+    ASSERT_NE(std::string::npos, reporter.errors.find("bad record length"));
+    ASSERT_EQ(0U, reader->LastRecordEnd());
+  }
+}
+
+TEST_F(WalZeroTailTest, NonzeroAfterZeroCandidateIsNotEof) {
+  const std::string record = Physical(kFullType, "later");
+  Reporter reporter;
+  auto reader = Open(std::string(kBlockSize, '\0') + record, &reporter);
+  Slice result;
+  std::string scratch;
+  ASSERT_TRUE(reader->ReadRecord(&result, &scratch,
+                                 WALRecoveryMode::kAbsoluteConsistency));
+  ASSERT_EQ("later", result.ToString());
+  ASSERT_EQ(kBlockSize + record.size(), reader->LastRecordEnd());
+}
+
+TEST_F(WalZeroTailTest, NonzeroWithinZeroCandidateReportsCorruption) {
+  std::string candidate(kBlockSize, '\0');
+  candidate[100] = 'x';
+  Reporter reporter;
+  auto reader = Open(candidate + Physical(kFullType, "later"), &reporter);
+  Slice result;
+  std::string scratch;
+  ASSERT_TRUE(reader->ReadRecord(&result, &scratch,
+                                WALRecoveryMode::kSkipAnyCorruptedRecords));
+  ASSERT_EQ("later", result.ToString());
+  ASSERT_NE(std::string::npos,
+            reporter.errors.find("nonzero data after zero WAL header"));
+}
+
+TEST_F(WalZeroTailTest, BoundedSmallReadsObservePublishedOverwrite) {
+  auto fs = Env::Default()->GetFileSystem();
+  if (!fs->SupportsZeroRangePreallocation()) return;
+  const std::string path = test::PerThreadDBPath("bounded_wal_small_read");
+  FileOptions write_options;
+  write_options.preallocation_mode = PreallocationMode::kZeroRange;
+  std::unique_ptr<FSWritableFile> writer;
+  ASSERT_OK(fs->NewWritableFile(path, write_options, &writer, nullptr));
+  ASSERT_OK(writer->Allocate(0, kBlockSize, IOOptions(), nullptr));
+  uint64_t allocated_size = 0;
+  ASSERT_OK(fs->GetFileSize(path, IOOptions(), &allocated_size, nullptr));
+  ASSERT_GE(allocated_size, static_cast<uint64_t>(kBlockSize));
+  ASSERT_OK(writer->Append(std::string(16, 'a'), IOOptions(), nullptr));
+  auto boundary = std::make_shared<WalReadBoundary>();
+  boundary->readable_end.store(16, std::memory_order_release);
+  FileOptions read_options;
+  read_options.disable_stdio_buffering = true;
+  // Copying and log-read optimization must retain the option.
+  FileOptions copied(read_options);
+  read_options = fs->OptimizeForLogRead(copied);
+  ASSERT_TRUE(read_options.disable_stdio_buffering);
+  std::unique_ptr<FSSequentialFile> source;
+  ASSERT_OK(fs->NewSequentialFile(path, read_options, &source, nullptr));
+  BoundedWalSequentialFile reader(std::move(source), boundary);
+  char scratch[64];
+  Slice result;
+  ASSERT_OK(reader.Read(16, IOOptions(), &result, scratch, nullptr));
+  ASSERT_EQ(std::string(16, 'a'), result.ToString());
+  ASSERT_OK(reader.Read(64, IOOptions(), &result, scratch, nullptr));
+  ASSERT_TRUE(result.empty());
+  ASSERT_OK(reader.Skip(100));  // Must not advance past the current R.
+  ASSERT_OK(writer->Append(std::string(32, 'b'), IOOptions(), nullptr));
+  boundary->readable_end.store(48, std::memory_order_release);
+  ASSERT_OK(reader.Read(64, IOOptions(), &result, scratch, nullptr));
+  ASSERT_EQ(std::string(32, 'b'), result.ToString());
+  boundary->sealed.store(true, std::memory_order_release);
+  ASSERT_OK(writer->Close(IOOptions(), nullptr));
+  ASSERT_OK(fs->DeleteFile(path, IOOptions(), nullptr));
+}
 
 class RetriableLogTest : public ::testing::TestWithParam<int> {
  private:

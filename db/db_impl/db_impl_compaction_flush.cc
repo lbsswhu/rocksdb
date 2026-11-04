@@ -96,6 +96,7 @@ IOStatus DBImpl::SyncClosedLogs(JobContext* job_context) {
     auto& log = *it;
     assert(!log.getting_synced);
     log.getting_synced = true;
+    log.synced_size_snapshot = log.writer->ReadableEnd();
     logs_to_sync.push_back(log.writer);
   }
 
@@ -107,7 +108,14 @@ IOStatus DBImpl::SyncClosedLogs(JobContext* job_context) {
       ROCKS_LOG_INFO(immutable_db_options_.info_log,
                      "[JOB %d] Syncing log #%" PRIu64, job_context->job_id,
                      log->get_log_number());
-      io_s = log->file()->Sync(immutable_db_options_.use_fsync);
+      if (log->UsesZeroRangePreallocation()) {
+        io_s = log->WriteBuffer();
+        if (io_s.ok()) {
+          io_s = log->file()->SyncWithoutFlush(immutable_db_options_.use_fsync);
+        }
+      } else {
+        io_s = log->file()->Sync(immutable_db_options_.use_fsync);
+      }
       if (!io_s.ok()) {
         break;
       }

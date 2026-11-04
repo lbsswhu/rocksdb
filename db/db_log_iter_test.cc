@@ -13,6 +13,7 @@
 #if !defined(ROCKSDB_LITE)
 
 #include "db/db_test_util.h"
+#include "rocksdb/utilities/checkpoint.h"
 #include "env/mock_env.h"
 #include "port/stack_trace.h"
 
@@ -167,6 +168,147 @@ TEST_F(DBTestXactLogIterator, TransactionLogIteratorStallAtLastRecord) {
     ASSERT_TRUE(iter->Valid());
   } while (ChangeCompactOptions());
 }
+
+TEST_F(DBTestXactLogIterator, ZeroRangeSmallRecordsResumeAfterPublication) {
+  for (bool manual : {false, true}) {
+    Options options = OptionsForLogIterTest();
+    options.env = Env::Default();
+    options.enable_zero_range_preallocation = true;
+    options.manual_wal_flush = manual;
+    options.write_buffer_size = 1024 * 1024;
+    DestroyAndReopen(options);
+    ASSERT_OK(Put("one", "small"));
+    if (manual) {
+      ASSERT_OK(db_->FlushWAL(false));
+    }
+    std::unique_ptr<LogFile> wal;
+    ASSERT_OK(db_->GetCurrentWalFile(&wal));
+    ASSERT_GT(wal->SizeFileBytes(), 0U);
+    uint64_t physical_size;
+    ASSERT_OK(
+        options.env->GetFileSize(dbname_ + wal->PathName(), &physical_size));
+    ASSERT_GT(physical_size, wal->SizeFileBytes());
+    auto iter = OpenTransactionLogIter(0);
+    ASSERT_EQ(1U, iter->GetBatch().sequence);
+    iter->Next();
+    ASSERT_FALSE(iter->Valid());
+    ASSERT_OK(iter->status());
+    // Same preallocated interval, well below libc's usual read buffer size.
+    ASSERT_OK(Put("two", "tiny"));
+    if (manual) {
+      iter->Next();
+      ASSERT_FALSE(iter->Valid());
+      // The existing iterator reports a temporary sequence/readable-prefix
+      // gap until manual FlushWAL publishes the pending complete record.
+      ASSERT_TRUE(iter->status().IsTryAgain());
+      ASSERT_OK(db_->FlushWAL(false));
+    }
+    iter->Next();
+    ASSERT_TRUE(iter->Valid());
+    ASSERT_EQ(2U, iter->GetBatch().sequence);
+    iter->Next();
+    ASSERT_FALSE(iter->Valid());
+    ASSERT_OK(Put("three", std::string(40000, 'x')));
+    if (manual) {
+      ASSERT_OK(db_->FlushWAL(false));
+    }
+    iter->Next();
+    ASSERT_TRUE(iter->Valid());
+    ASSERT_EQ(3U, iter->GetBatch().sequence);
+    ASSERT_OK(iter->status());
+    LiveFilesStorageInfoOptions snapshot_options;
+    snapshot_options.wal_size_for_flush = port::kMaxUint64;
+    std::vector<LiveFileStorageInfo> files;
+    ASSERT_OK(db_->GetLiveFilesStorageInfo(snapshot_options, &files));
+    bool found_wal = false;
+    for (const auto& info : files) {
+      if (info.file_type == kWalFile) {
+        found_wal = true;
+        ASSERT_TRUE(info.trim_to_size);
+        ASSERT_LT(info.size, physical_size);
+      }
+    }
+    ASSERT_TRUE(found_wal);
+    // Checkpoint must copy only R even though the source WAL still has a
+    // larger reserved extent, including manual-flush configurations.
+    const std::string checkpoint_path = dbname_ + "_zero_checkpoint";
+    ASSERT_OK(DestroyDB(checkpoint_path, options));
+    Checkpoint* raw_checkpoint = nullptr;
+    ASSERT_OK(Checkpoint::Create(db_, &raw_checkpoint));
+    std::unique_ptr<Checkpoint> checkpoint(raw_checkpoint);
+    ASSERT_OK(checkpoint->CreateCheckpoint(checkpoint_path, port::kMaxUint64));
+    ASSERT_OK(db_->GetCurrentWalFile(&wal));
+    uint64_t copied_size = 0;
+    ASSERT_OK(options.env->GetFileSize(checkpoint_path + wal->PathName(),
+                                      &copied_size));
+    ASSERT_EQ(wal->SizeFileBytes(), copied_size);
+    Options restore_options(options);
+    restore_options.wal_dir.clear();
+    restore_options.enable_zero_range_preallocation = false;
+    DB* raw_restore = nullptr;
+    ASSERT_OK(DB::Open(restore_options, checkpoint_path, &raw_restore));
+    std::unique_ptr<DB> restore(raw_restore);
+    std::string value;
+    ASSERT_OK(restore->Get(ReadOptions(), "one", &value));
+    ASSERT_EQ("small", value);
+    ASSERT_OK(restore->Get(ReadOptions(), "two", &value));
+    ASSERT_EQ("tiny", value);
+    ASSERT_OK(restore->Get(ReadOptions(), "three", &value));
+    ASSERT_EQ(std::string(40000, 'x'), value);
+    ASSERT_OK(restore->Close());
+    restore.reset();
+    ASSERT_OK(DestroyDB(checkpoint_path, restore_options));
+  }
+}
+
+#if GTEST_HAS_DEATH_TEST && defined(OS_LINUX)
+TEST_F(DBTestXactLogIterator, ZeroRangeCrashRecoversSyncedRecordWithOptionOff) {
+  // Re-exec for the child so inherited background-pool mutexes cannot affect
+  // the crash simulation. _exit deliberately bypasses every writer destructor.
+  ::testing::FLAGS_gtest_death_test_style = "threadsafe";
+  Options options = OptionsForLogIterTest();
+  options.env = Env::Default();
+  options.enable_zero_range_preallocation = true;
+  options.write_buffer_size = 1024 * 1024;
+  DestroyAndReopen(options);
+  Close();
+  // PerThreadDBPath includes the PID, so the re-executed child must inherit
+  // the parent's explicit database path rather than use its own fixture path.
+  if (getenv("ROCKSDB_ZERO_RANGE_CRASH_DB") == nullptr) {
+    ASSERT_EQ(0, setenv("ROCKSDB_ZERO_RANGE_CRASH_DB", dbname_.c_str(), 1));
+  }
+  const std::string crash_dbname = getenv("ROCKSDB_ZERO_RANGE_CRASH_DB");
+  ASSERT_EXIT(
+      {
+        DB* crash_db = nullptr;
+        if (!DB::Open(options, crash_dbname, &crash_db).ok()) _exit(10);
+        WriteOptions write_options;
+        write_options.sync = true;
+        if (!crash_db->Put(write_options, "synced-before-crash", "durable")
+                 .ok()) {
+          _exit(11);
+        }
+        std::unique_ptr<LogFile> wal;
+        if (!crash_db->GetCurrentWalFile(&wal).ok()) _exit(12);
+        uint64_t physical_size = 0;
+        if (!options.env->GetFileSize(crash_dbname + wal->PathName(), &physical_size)
+                 .ok()) {
+          _exit(13);
+        }
+        if (physical_size <= wal->SizeFileBytes() ||
+            wal->SizeFileBytes() == 0) {
+          _exit(14);
+        }
+        _exit(0);
+      },
+      ::testing::ExitedWithCode(0), "");
+  ASSERT_EQ(0, unsetenv("ROCKSDB_ZERO_RANGE_CRASH_DB"));
+  options.enable_zero_range_preallocation = false;
+  options.wal_recovery_mode = WALRecoveryMode::kAbsoluteConsistency;
+  Reopen(options);
+  ASSERT_EQ("durable", Get("synced-before-crash"));
+}
+#endif
 
 TEST_F(DBTestXactLogIterator, TransactionLogIteratorCheckAfterRestart) {
   do {

@@ -106,6 +106,8 @@ struct IOOptions {
 // while its open. We may add more options here in the future such as
 // redundancy level, media to use etc.
 struct FileOptions : EnvOptions {
+  // Internal bounded sequential readers must not cache bytes past their limit.
+  bool disable_stdio_buffering = false;
   // Embedded IOOptions to control the parameters for any IOs that need
   // to be issued for the file open/creation
   IOOptions io_options;
@@ -131,6 +133,7 @@ struct FileOptions : EnvOptions {
 
   FileOptions(const FileOptions& opts)
       : EnvOptions(opts),
+        disable_stdio_buffering(opts.disable_stdio_buffering),
         io_options(opts.io_options),
         temperature(opts.temperature),
         handoff_checksum_type(opts.handoff_checksum_type) {}
@@ -217,6 +220,9 @@ class FileSystem {
   virtual ~FileSystem();
 
   virtual const char* Name() const = 0;
+
+  // Opt in only after auditing allocation, final lengths, and bounded reads.
+  virtual bool SupportsZeroRangePreallocation() const { return false; }
 
   static const char* Type() { return "FileSystem"; }
 
@@ -815,6 +821,10 @@ class FSWritableFile {
         strict_bytes_per_sync_(options.strict_bytes_per_sync) {}
 
   virtual ~FSWritableFile() {}
+
+  virtual PreallocationMode GetPreallocationMode() const {
+    return PreallocationMode::kLegacy;
+  }
 
   // Append data to the end of the file
   // Note: A WriteableFile object must support either Append or
@@ -1445,6 +1455,10 @@ class FSWritableFileWrapper : public FSWritableFile {
   explicit FSWritableFileWrapper(FSWritableFile* t) : target_(t) {}
 
   FSWritableFile* target() const { return target_; }
+
+  PreallocationMode GetPreallocationMode() const override {
+    return target_->GetPreallocationMode();
+  }
 
   IOStatus Append(const Slice& data, const IOOptions& options,
                   IODebugContext* dbg) override {

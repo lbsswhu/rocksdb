@@ -14,6 +14,8 @@
 #include "rocksdb/flush_block_policy.h"
 #include "rocksdb/merge_operator.h"
 #include "rocksdb/perf_context.h"
+#include "rocksdb/sst_file_writer.h"
+#include "rocksdb/statistics.h"
 #include "rocksdb/utilities/debug.h"
 #include "table/block_based/block_based_table_reader.h"
 #include "table/block_based/block_builder.h"
@@ -32,6 +34,92 @@ class DBBasicTest : public DBTestBase {
  public:
   DBBasicTest() : DBTestBase("db_basic_test", /*env_do_fsync=*/false) {}
 };
+
+#ifndef ROCKSDB_LITE
+TEST_F(DBBasicTest, ZeroRangeFlushCompactionAndExternalSst) {
+  if (!Env::Default()->GetFileSystem()->SupportsZeroRangePreallocation()) {
+    return;
+  }
+  for (bool direct : {false, true}) {
+    Options options;
+    options.env = Env::Default();
+    options.create_if_missing = true;
+    options.write_buffer_size = 64 << 10;
+    options.target_file_size_base = 64 << 10;
+    options.max_bytes_for_level_base = 256 << 10;
+    options.compression = kNoCompression;
+    options.disable_auto_compactions = true;
+    options.use_direct_io_for_flush_and_compaction = direct;
+    options.statistics = CreateDBStatistics();
+    const std::string path =
+        dbname_ + (direct ? "-zero-direct" : "-zero-buffered");
+    ASSERT_OK(DestroyDB(path, options));
+    DB* raw = nullptr;
+    ASSERT_OK(DB::Open(options, path, &raw));
+    std::unique_ptr<DB> db(raw);
+    for (int round = 0; round < 5; ++round) {
+      for (int key = 0; key < 200; ++key) {
+        ASSERT_OK(db->Put(WriteOptions(), std::to_string(key),
+                          std::string(1024, static_cast<char>('a' + round))));
+      }
+      ASSERT_OK(db->Flush(FlushOptions()));
+    }
+    const auto before_compaction =
+        options.statistics->getTickerCount(ZERO_RANGE_PREALLOCATION_CALLS);
+    ASSERT_GT(before_compaction, 0U);
+    CompactRangeOptions compact;
+    compact.bottommost_level_compaction = BottommostLevelCompaction::kForce;
+    compact.max_subcompactions = 2;
+    ASSERT_OK(db->CompactRange(compact, nullptr, nullptr));
+    ASSERT_GT(
+        options.statistics->getTickerCount(ZERO_RANGE_PREALLOCATION_CALLS),
+        before_compaction);
+    ASSERT_EQ(0U, options.statistics->getTickerCount(
+                      ZERO_RANGE_PREALLOCATION_FALLBACKS));
+    std::vector<LiveFileMetaData> files;
+    db->GetLiveFilesMetaData(&files);
+    ASSERT_FALSE(files.empty());
+    for (const auto& file : files) {
+      uint64_t physical_size = 0;
+      ASSERT_OK(
+          options.env->GetFileSize(file.db_path + file.name, &physical_size));
+      ASSERT_EQ(file.size, physical_size);
+    }
+    ASSERT_OK(db->VerifyChecksum());
+    ASSERT_OK(db->Close());
+    db.reset();
+    options.enable_zero_range_preallocation = false;
+    ASSERT_OK(DB::Open(options, path, &raw));
+    db.reset(raw);
+    for (int key = 0; key < 200; ++key) {
+      std::string value;
+      ASSERT_OK(db->Get(ReadOptions(), std::to_string(key), &value));
+      ASSERT_EQ(std::string(1024, 'e'), value);
+    }
+    ASSERT_OK(db->Close());
+    db.reset();
+
+    options.enable_zero_range_preallocation = true;
+    const std::string external = path + "/external.sst";
+    const auto other_sst_calls = options.statistics->getTickerCount(
+        ZERO_RANGE_PREALLOCATION_OTHER_SST_CALLS);
+    SstFileWriter writer(EnvOptions(options), options);
+    ASSERT_OK(writer.Open(external));
+    ASSERT_OK(writer.Put("a", "external-value"));
+    ASSERT_OK(writer.DeleteRange("b", "z"));
+    ExternalSstFileInfo info;
+    ASSERT_OK(writer.Finish(&info));
+    ASSERT_GT(options.statistics->getTickerCount(
+                  ZERO_RANGE_PREALLOCATION_OTHER_SST_CALLS),
+              other_sst_calls);
+    uint64_t external_size = 0;
+    ASSERT_OK(options.env->GetFileSize(external, &external_size));
+    ASSERT_EQ(info.file_size, external_size);
+    ASSERT_OK(options.env->DeleteFile(external));
+    ASSERT_OK(DestroyDB(path, options));
+  }
+}
+#endif
 
 TEST_F(DBBasicTest, OpenWhenOpen) {
   Options options = CurrentOptions();

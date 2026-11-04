@@ -41,6 +41,7 @@
 #include "db/range_del_aggregator.h"
 #include "db/version_set.h"
 #include "file/filename.h"
+#include "file/preallocation.h"
 #include "file/read_write_util.h"
 #include "file/sst_file_manager_impl.h"
 #include "file/writable_file_writer.h"
@@ -1770,10 +1771,7 @@ Status CompactionJob::FinishCompactionOutputFile(
   // Finish and check for file errors
   if (s.ok()) {
     StopWatch sw(db_options_.clock, stats_, COMPACTION_OUTFILE_SYNC_MICROS);
-    io_s = sub_compact->outfile->Sync(db_options_.use_fsync);
-  }
-  if (s.ok() && io_s.ok()) {
-    io_s = sub_compact->outfile->Close();
+    io_s = sub_compact->outfile->FinishAndClose(db_options_.use_fsync);
   }
   if (s.ok() && io_s.ok()) {
     // Add the checksum information to file metadata.
@@ -1997,6 +1995,8 @@ Status CompactionJob::OpenCompactionOutputFile(
         sub_compact->compaction->mutable_cf_options()->bottommost_temperature;
   }
   fo_copy.temperature = temperature;
+  ConfigureZeroRangePreallocation(
+      fs_.get(), db_options_.enable_zero_range_preallocation, &fo_copy);
 
   Status s;
   IOStatus io_s = NewWritableFile(fs_.get(), fname, &writable_file, fo_copy);
@@ -2063,10 +2063,11 @@ Status CompactionJob::OpenCompactionOutputFile(
   const auto& listeners =
       sub_compact->compaction->immutable_options()->listeners;
   sub_compact->outfile.reset(new WritableFileWriter(
-      std::move(writable_file), fname, file_options_, db_options_.clock,
-      io_tracer_, db_options_.stats, listeners,
-      db_options_.file_checksum_gen_factory.get(),
+      std::move(writable_file), fname, fo_copy, db_options_.clock, io_tracer_,
+      db_options_.stats, listeners, db_options_.file_checksum_gen_factory.get(),
       tmp_set.Contains(FileType::kTableFile), false));
+  sub_compact->outfile->SetPreallocationSource(
+      PreallocationSource::kCompaction);
 
   TableBuilderOptions tboptions(
       *cfd->ioptions(), *(sub_compact->compaction->mutable_cf_options()),

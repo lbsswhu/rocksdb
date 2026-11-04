@@ -1189,7 +1189,13 @@ PosixWritableFile::PosixWritableFile(const std::string& fname, int fd,
       use_direct_io_(options.use_direct_writes),
       fd_(fd),
       filesize_(0),
-      logical_sector_size_(logical_block_size) {
+      logical_sector_size_(logical_block_size),
+      preallocation_mode_(PreallocationMode::kLegacy) {
+#if defined(ROCKSDB_FALLOCATE_PRESENT) && defined(FALLOC_FL_ZERO_RANGE)
+  if (options.allow_fallocate && !options.use_mmap_writes) {
+    preallocation_mode_ = options.preallocation_mode;
+  }
+#endif
 #ifdef ROCKSDB_FALLOCATE_PRESENT
   allow_fallocate_ = options.allow_fallocate;
   fallocate_with_keep_size_ = options.fallocate_with_keep_size;
@@ -1246,12 +1252,24 @@ IOStatus PosixWritableFile::PositionedAppend(const Slice& data, uint64_t offset,
 IOStatus PosixWritableFile::Truncate(uint64_t size, const IOOptions& /*opts*/,
                                      IODebugContext* /*dbg*/) {
   IOStatus s;
-  int r = ftruncate(fd_, size);
+  int r;
+  do {
+    int injected_error = 0;
+    TEST_SYNC_POINT_CALLBACK("PosixWritableFile::Truncate:Error",
+                             &injected_error);
+    if (injected_error != 0) {
+      errno = injected_error;
+      r = -1;
+    } else {
+      r = ftruncate(fd_, size);
+    }
+  } while (r < 0 && errno == EINTR);
   if (r < 0) {
     s = IOError("While ftruncate file to size " + ToString(size), filename_,
                 errno);
   } else {
     filesize_ = size;
+    needs_final_truncate_ = false;
   }
   return s;
 }
@@ -1264,6 +1282,11 @@ IOStatus PosixWritableFile::Close(const IOOptions& /*opts*/,
   size_t last_allocated_block;
   GetPreallocationStatus(&block_size, &last_allocated_block);
   TEST_SYNC_POINT_CALLBACK("PosixWritableFile::Close", &last_allocated_block);
+  if (needs_final_truncate_) {
+    // Allocation may enlarge EOF even when it ultimately reports an error.
+    // filesize_ tracks bytes actually written, never pending writer buffers.
+    s = Truncate(filesize_, IOOptions(), nullptr);
+  }
   if (last_allocated_block > 0) {
     // trim the extra space preallocated at the end of the file
     // NOTE(ljin): we probably don't want to surface failure as an IOError,
@@ -1305,7 +1328,7 @@ IOStatus PosixWritableFile::Close(const IOOptions& /*opts*/,
 #endif
   }
 
-  if (close(fd_) < 0) {
+  if (close(fd_) < 0 && s.ok()) {
     s = IOError("While closing file after writing", filename_, errno);
   }
   fd_ = -1;
@@ -1381,23 +1404,52 @@ IOStatus PosixWritableFile::InvalidateCache(size_t offset, size_t length) {
 IOStatus PosixWritableFile::Allocate(uint64_t offset, uint64_t len,
                                      const IOOptions& /*opts*/,
                                      IODebugContext* /*dbg*/) {
-  assert(offset <= static_cast<uint64_t>(std::numeric_limits<off_t>::max()));
-  assert(len <= static_cast<uint64_t>(std::numeric_limits<off_t>::max()));
+  const uint64_t limit =
+      static_cast<uint64_t>(std::numeric_limits<off_t>::max());
+  if (offset > limit || len > limit - offset) {
+    return IOStatus::InvalidArgument("fallocate range exceeds off_t");
+  }
   TEST_KILL_RANDOM("PosixWritableFile::Allocate:0");
   IOSTATS_TIMER_GUARD(allocate_nanos);
-  int alloc_status = 0;
-  if (allow_fallocate_) {
+  if (!allow_fallocate_ || len == 0) return IOStatus::OK();
+  int alloc_status;
+#if defined(FALLOC_FL_ZERO_RANGE)
+  if (preallocation_mode_ == PreallocationMode::kZeroRange) {
+    needs_final_truncate_ = true;
+    TEST_SYNC_POINT_CALLBACK("PosixWritableFile::Allocate:ZeroRange",
+                             const_cast<std::string*>(&filename_));
+    do {
+      int injected_error = 0;
+      TEST_SYNC_POINT_CALLBACK("PosixWritableFile::Allocate:ZeroRangeError",
+                               &injected_error);
+      if (injected_error != 0) {
+        errno = injected_error;
+        alloc_status = -1;
+      } else {
+        alloc_status =
+            fallocate(fd_, FALLOC_FL_ZERO_RANGE, static_cast<off_t>(offset),
+                      static_cast<off_t>(len));
+      }
+    } while (alloc_status != 0 && errno == EINTR);
+    if (alloc_status == 0) return IOStatus::OK();
+    int error = errno;
+    if (error != EOPNOTSUPP && error != ENOSYS) {
+      return IOError("While ZERO_RANGE fallocate", filename_, error);
+    }
+    preallocation_mode_ = PreallocationMode::kLegacy;
+    TEST_SYNC_POINT_CALLBACK("PosixWritableFile::Allocate:ZeroRangeFallback",
+                             &error);
+  }
+#endif
+  do {
     alloc_status =
         fallocate(fd_, fallocate_with_keep_size_ ? FALLOC_FL_KEEP_SIZE : 0,
                   static_cast<off_t>(offset), static_cast<off_t>(len));
-  }
-  if (alloc_status == 0) {
-    return IOStatus::OK();
-  } else {
-    return IOError(
-        "While fallocate offset " + ToString(offset) + " len " + ToString(len),
-        filename_, errno);
-  }
+  } while (alloc_status != 0 && errno == EINTR);
+  if (alloc_status == 0) return IOStatus::OK();
+  return IOError(
+      "While fallocate offset " + ToString(offset) + " len " + ToString(len),
+      filename_, errno);
 }
 #endif
 

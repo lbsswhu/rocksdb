@@ -139,6 +139,13 @@ int cloexec_flags(int flags, const EnvOptions* options) {
 
 class PosixFileSystem : public FileSystem {
  public:
+  bool SupportsZeroRangePreallocation() const override {
+#if defined(ROCKSDB_FALLOCATE_PRESENT) && defined(FALLOC_FL_ZERO_RANGE)
+    return true;
+#else
+    return false;
+#endif
+  }
   PosixFileSystem();
 
   const char* Name() const override { return "Posix File System"; }
@@ -198,6 +205,19 @@ class PosixFileSystem : public FileSystem {
         close(fd);
         return IOError("While opening file for sequentially read", fname,
                        errno);
+      }
+      if (options.disable_stdio_buffering) {
+        errno = 0;
+        std::pair<int, int> buffering_result(setvbuf(file, nullptr, _IONBF, 0),
+                                             fd);
+        TEST_SYNC_POINT_CALLBACK("NewSequentialFile:Setvbuf",
+                                 &buffering_result);
+        if (buffering_result.first != 0) {
+          int error = errno;
+          fclose(file);
+          return IOError("While disabling sequential read buffering", fname,
+                         error == 0 ? EIO : error);
+        }
       }
     }
     result->reset(new PosixSequentialFile(
@@ -358,6 +378,9 @@ class PosixFileSystem : public FileSystem {
       // disable mmap writes
       EnvOptions no_mmap_writes_options = options;
       no_mmap_writes_options.use_mmap_writes = false;
+      if (options.use_mmap_writes) {
+        no_mmap_writes_options.preallocation_mode = PreallocationMode::kLegacy;
+      }
       result->reset(
           new PosixWritableFile(fname, fd,
                                 GetLogicalBlockSizeForWriteIfNeeded(
@@ -377,15 +400,19 @@ class PosixFileSystem : public FileSystem {
                               const FileOptions& options,
                               std::unique_ptr<FSWritableFile>* result,
                               IODebugContext* dbg) override {
-    return OpenWritableFile(fname, options, true, result, dbg);
+    FileOptions legacy_options(options);
+    legacy_options.preallocation_mode = PreallocationMode::kLegacy;
+    return OpenWritableFile(fname, legacy_options, true, result, dbg);
   }
 
   IOStatus ReuseWritableFile(const std::string& fname,
                              const std::string& old_fname,
-                             const FileOptions& options,
+                             const FileOptions& requested_options,
                              std::unique_ptr<FSWritableFile>* result,
                              IODebugContext* /*dbg*/) override {
     result->reset();
+    FileOptions options(requested_options);
+    options.preallocation_mode = PreallocationMode::kLegacy;
     IOStatus s;
     int fd = -1;
 

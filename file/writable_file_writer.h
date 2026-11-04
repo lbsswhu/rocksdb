@@ -26,6 +26,8 @@ namespace ROCKSDB_NAMESPACE {
 class Statistics;
 class SystemClock;
 
+enum class PreallocationSource { kWal, kFlush, kCompaction, kOtherSst };
+
 // WritableFileWriter is a wrapper on top of Env::WritableFile. It provides
 // facilities to:
 // - Handle Buffered and Direct writes.
@@ -147,6 +149,20 @@ class WritableFileWriter {
   uint32_t buffered_data_crc32c_checksum_;
   bool buffered_data_with_checksum_;
 
+  const bool zero_range_preallocation_;
+  PreallocationSource preallocation_source_ = PreallocationSource::kOtherSst;
+  uint64_t reserved_end_ = 0;
+  bool sealing_ = false;
+  bool sealed_ = false;
+  bool closed_ = false;
+  bool needs_final_truncate_ = false;
+  bool final_truncate_pending_sync_ = false;
+  IOStatus first_error_;
+  IOStatus close_status_;
+
+  IOStatus PrepareAppend(uint64_t offset, size_t len);
+  IOStatus RememberError(const IOStatus& status);
+
  public:
   WritableFileWriter(
       std::unique_ptr<FSWritableFile>&& file, const std::string& _file_name,
@@ -176,7 +192,13 @@ class WritableFileWriter {
         checksum_finalized_(false),
         perform_data_verification_(perform_data_verification),
         buffered_data_crc32c_checksum_(0),
-        buffered_data_with_checksum_(buffered_data_with_checksum) {
+        buffered_data_with_checksum_(buffered_data_with_checksum),
+        zero_range_preallocation_(writable_file_->GetPreallocationMode() ==
+                                  PreallocationMode::kZeroRange) {
+    if (_file_name.size() >= 4 &&
+        _file_name.compare(_file_name.size() - 4, 4, ".log") == 0) {
+      preallocation_source_ = PreallocationSource::kWal;
+    }
     TEST_SYNC_POINT_CALLBACK("WritableFileWriter::WritableFileWriter:0",
                              reinterpret_cast<void*>(max_buffer_size_));
     buf_.Alignment(writable_file_->GetRequiredBufferAlignment());
@@ -225,11 +247,21 @@ class WritableFileWriter {
 
   IOStatus Close();
 
+  IOStatus Seal();
+  IOStatus FinishAndClose(bool use_fsync);
+  bool IsSealed() const { return sealed_; }
+  bool UsesZeroRangePreallocation() const { return zero_range_preallocation_; }
+  void SetPreallocationSource(PreallocationSource source) {
+    preallocation_source_ = source;
+  }
+
   IOStatus Sync(bool use_fsync);
 
   // Sync only the data that was already Flush()ed. Safe to call concurrently
   // with Append() and Flush(). If !writable_file_->IsSyncThreadSafe(),
   // returns NotSupported status.
+  // Its caller owns concurrent sync-error retention; this method does not
+  // mutate the single-writer failure/sealing state.
   IOStatus SyncWithoutFlush(bool use_fsync);
 
   uint64_t GetFileSize() const { return filesize_; }

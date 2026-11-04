@@ -156,6 +156,10 @@ static std::unordered_map<std::string, OptionTypeInfo>
          {offsetof(struct ImmutableDBOptions, allow_fallocate),
           OptionType::kBoolean, OptionVerificationType::kNormal,
           OptionTypeFlags::kNone}},
+        {"enable_zero_range_preallocation",
+         {offsetof(struct ImmutableDBOptions, enable_zero_range_preallocation),
+          OptionType::kBoolean, OptionVerificationType::kNormal,
+          OptionTypeFlags::kNone}},
         {"allow_mmap_writes",
          {offsetof(struct ImmutableDBOptions, allow_mmap_writes),
           OptionType::kBoolean, OptionVerificationType::kNormal,
@@ -684,6 +688,7 @@ ImmutableDBOptions::ImmutableDBOptions(const DBOptions& options)
       use_direct_io_for_flush_and_compaction(
           options.use_direct_io_for_flush_and_compaction),
       allow_fallocate(options.allow_fallocate),
+      enable_zero_range_preallocation(options.enable_zero_range_preallocation),
       is_fd_close_on_exec(options.is_fd_close_on_exec),
       advise_random_on_open(options.advise_random_on_open),
       experimental_mempurge_threshold(options.experimental_mempurge_threshold),
@@ -786,6 +791,8 @@ void ImmutableDBOptions::Dump(Logger* log) const {
       recycle_log_file_num);
   ROCKS_LOG_HEADER(log, "                        Options.allow_fallocate: %d",
                    allow_fallocate);
+  ROCKS_LOG_HEADER(log, "      Options.enable_zero_range_preallocation: %d",
+                   enable_zero_range_preallocation);
   ROCKS_LOG_HEADER(log, "                       Options.allow_mmap_reads: %d",
                    allow_mmap_reads);
   ROCKS_LOG_HEADER(log, "                      Options.allow_mmap_writes: %d",

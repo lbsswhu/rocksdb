@@ -17,8 +17,10 @@ TransactionLogIteratorImpl::TransactionLogIteratorImpl(
     const TransactionLogIterator::ReadOptions& read_options,
     const EnvOptions& soptions, const SequenceNumber seq,
     std::unique_ptr<VectorLogPtr> files, VersionSet const* const versions,
-    const bool seq_per_batch, const std::shared_ptr<IOTracer>& io_tracer)
-    : dir_(dir),
+    const bool seq_per_batch, const std::shared_ptr<IOTracer>& io_tracer,
+    std::shared_ptr<WalReadBoundaryRegistry> wal_read_boundaries)
+    : wal_read_boundaries_(std::move(wal_read_boundaries)),
+      dir_(dir),
       options_(options),
       read_options_(read_options),
       soptions_(soptions),
@@ -47,7 +49,11 @@ Status TransactionLogIteratorImpl::OpenLogFile(
   std::unique_ptr<FSSequentialFile> file;
   std::string fname;
   Status s;
-  EnvOptions optimized_env_options = fs->OptimizeForLogRead(soptions_);
+  FileOptions optimized_env_options(fs->OptimizeForLogRead(soptions_));
+  auto boundary = wal_read_boundaries_
+                      ? wal_read_boundaries_->Get(log_file->LogNumber())
+                      : nullptr;
+  optimized_env_options.disable_stdio_buffering = boundary != nullptr;
   if (log_file->Type() == kArchivedLogFile) {
     fname = ArchivedLogFileName(dir_, log_file->LogNumber());
     s = fs->NewSequentialFile(fname, optimized_env_options, &file, nullptr);
@@ -63,6 +69,9 @@ Status TransactionLogIteratorImpl::OpenLogFile(
     }
   }
   if (s.ok()) {
+    if (boundary) {
+      file.reset(new BoundedWalSequentialFile(std::move(file), boundary));
+    }
     file_reader->reset(new SequentialFileReader(
         std::move(file), fname, io_tracer_, options_->listeners));
   }
@@ -311,7 +320,8 @@ Status TransactionLogIteratorImpl::OpenLogReader(const LogFile* log_file) {
   assert(file);
   current_log_reader_.reset(
       new log::Reader(options_->info_log, std::move(file), &reporter_,
-                      read_options_.verify_checksums_, log_file->LogNumber()));
+                      read_options_.verify_checksums_, log_file->LogNumber(),
+                      true /* WAL zero tail */));
   return Status::OK();
 }
 }  // namespace ROCKSDB_NAMESPACE

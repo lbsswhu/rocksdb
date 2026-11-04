@@ -10,6 +10,9 @@
 #include "db/log_reader.h"
 
 #include <stdio.h>
+
+#include <algorithm>
+
 #include "file/sequence_file_reader.h"
 #include "port/lang.h"
 #include "rocksdb/env.h"
@@ -25,7 +28,8 @@ Reader::Reporter::~Reporter() {
 
 Reader::Reader(std::shared_ptr<Logger> info_log,
                std::unique_ptr<SequentialFileReader>&& _file,
-               Reporter* reporter, bool checksum, uint64_t log_num)
+               Reporter* reporter, bool checksum, uint64_t log_num,
+               bool wal_zero_tail)
     : info_log_(info_log),
       file_(std::move(_file)),
       reporter_(reporter),
@@ -36,6 +40,8 @@ Reader::Reader(std::shared_ptr<Logger> info_log,
       read_error_(false),
       eof_offset_(0),
       last_record_offset_(0),
+      last_record_end_(0),
+      wal_zero_tail_(wal_zero_tail),
       end_of_buffer_offset_(0),
       log_number_(log_num),
       recycled_(false) {}
@@ -79,6 +85,7 @@ bool Reader::ReadRecord(Slice* record, std::string* scratch,
         scratch->clear();
         *record = fragment;
         last_record_offset_ = prospective_record_offset;
+        last_record_end_ = end_of_buffer_offset_ - buffer_.size();
         return true;
 
       case kFirstType:
@@ -114,6 +121,7 @@ bool Reader::ReadRecord(Slice* record, std::string* scratch,
           scratch->append(fragment.data(), fragment.size());
           *record = Slice(*scratch);
           last_record_offset_ = prospective_record_offset;
+          last_record_end_ = end_of_buffer_offset_ - buffer_.size();
           return true;
         }
         break;
@@ -232,7 +240,8 @@ uint64_t Reader::LastRecordOffset() {
 }
 
 uint64_t Reader::LastRecordEnd() {
-  return end_of_buffer_offset_ - buffer_.size();
+  return wal_zero_tail_ ? last_record_end_
+                        : end_of_buffer_offset_ - buffer_.size();
 }
 
 void Reader::UnmarkEOF() {
@@ -332,6 +341,13 @@ bool Reader::ReadMore(size_t* drop_size, int *error) {
     //  end of the file, which can be caused by the writer crashing in the
     //  middle of writing the header. Unless explicitly requested we don't
     //  considering this an error, just report EOF.
+    if (wal_zero_tail_ &&
+        std::all_of(buffer_.data(), buffer_.data() + buffer_.size(),
+                    [](char c) { return c == 0; })) {
+      buffer_.clear();
+      *error = kEof;
+      return false;
+    }
     if (buffer_.size()) {
       *drop_size = buffer_.size();
       buffer_.clear();
@@ -394,6 +410,35 @@ unsigned int Reader::ReadPhysicalRecord(Slice* result, size_t* drop_size) {
       return kBadRecordLen;
     }
 
+    if (wal_zero_tail_ && type == kZeroType && length == 0 &&
+        DecodeFixed32(header) == 0) {
+      // Validate the entire candidate tail with constant memory. A later
+      // nonzero block is retained for ordinary parsing and corruption checks.
+      while (std::all_of(buffer_.data(), buffer_.data() + buffer_.size(),
+                         [](char c) { return c == 0; })) {
+        buffer_.clear();
+        // Preserve the existing zero-record handling for an unfinished
+        // logical record: kBadRecord reports its missing final fragment.
+        if (eof_) return kBadRecord;
+        if (read_error_) return kEof;
+        int error = kEof;
+        if (!ReadMore(drop_size, &error)) return error;
+      }
+      // Historical zero padding may precede a later block. Do not declare EOF
+      // or discard that block. Within a block, preserve legacy skip semantics.
+      if (buffer_.size() >= kHeaderSize && DecodeFixed32(buffer_.data()) == 0 &&
+          buffer_[4] == 0 && buffer_[5] == 0 && buffer_[6] == 0) {
+        ReportCorruption(buffer_.size(), "nonzero data after zero WAL header");
+        buffer_.clear();
+      }
+      return kBadRecord;
+    }
+    if (wal_zero_tail_ && type == kZeroType && length == 0 &&
+        DecodeFixed32(header) != 0) {
+      *drop_size = buffer_.size();
+      buffer_.clear();
+      return kBadRecordChecksum;
+    }
     if (type == kZeroType && length == 0) {
       // Skip zero length record without reporting any drops since
       // such records are produced by the mmap based writing code in
@@ -449,6 +494,7 @@ bool FragmentBufferedReader::ReadRecord(Slice* record, std::string* scratch,
         *record = fragment;
         prospective_record_offset = physical_record_offset;
         last_record_offset_ = prospective_record_offset;
+        last_record_end_ = end_of_buffer_offset_ - buffer_.size();
         in_fragmented_record_ = false;
         return true;
 
@@ -483,6 +529,7 @@ bool FragmentBufferedReader::ReadRecord(Slice* record, std::string* scratch,
           fragments_.clear();
           *record = Slice(*scratch);
           last_record_offset_ = prospective_record_offset;
+          last_record_end_ = end_of_buffer_offset_ - buffer_.size();
           in_fragmented_record_ = false;
           return true;
         }

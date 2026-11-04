@@ -27,6 +27,10 @@ class FileSystemTracingWrapper : public FileSystemWrapper {
 
   ~FileSystemTracingWrapper() override {}
 
+  bool SupportsZeroRangePreallocation() const override {
+    return target()->SupportsZeroRangePreallocation();
+  }
+
   IOStatus NewSequentialFile(const std::string& fname,
                              const FileOptions& file_opts,
                              std::unique_ptr<FSSequentialFile>* result,

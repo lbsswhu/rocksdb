@@ -62,6 +62,174 @@ class DBWALTest : public DBWALTestBase {
   DBWALTest() : DBWALTestBase("/db_wal_test") {}
 };
 
+TEST_F(DBWALTest, ZeroRangeWALPublicationAndSealing) {
+  for (bool manual_flush : {false, true}) {
+    for (bool two_queues : {false, true}) {
+      Options options = CurrentOptions();
+      // Exercise the audited local POSIX filesystem instead of SpecialEnv's
+      // intentionally conservative compatibility bridge.
+      options.env = Env::Default();
+      if (!options.env->GetFileSystem()->SupportsZeroRangePreallocation()) {
+        return;
+      }
+      options.enable_zero_range_preallocation = true;
+      options.manual_wal_flush = manual_flush;
+      options.two_write_queues = two_queues;
+      options.write_buffer_size = 64 * 1024;
+      options.statistics = CreateDBStatistics();
+      DestroyAndReopen(options);
+      ASSERT_OK(db_->DisableFileDeletions());
+      const uint64_t first_log = dbfull()->TEST_LogfileNumber();
+      const std::string first_path = LogFileName(dbname_, first_log);
+      ASSERT_OK(Put("first", "value"));
+      std::unique_ptr<LogFile> live;
+      ASSERT_OK(db_->GetCurrentWalFile(&live));
+      if (manual_flush) {
+        ASSERT_EQ(0, live->SizeFileBytes());
+      }
+      ASSERT_OK(db_->FlushWAL(false));
+      ASSERT_OK(db_->GetCurrentWalFile(&live));
+      const uint64_t first_end = live->SizeFileBytes();
+      ASSERT_GT(first_end, 0);
+
+      uint64_t physical_size;
+      ASSERT_OK(options.env->GetFileSize(first_path, &physical_size));
+      ASSERT_GE(physical_size, first_end);
+      if (options.statistics->getTickerCount(
+              ZERO_RANGE_PREALLOCATION_FALLBACKS) == 0) {
+        ASSERT_GT(options.statistics->getTickerCount(
+                      ZERO_RANGE_PREALLOCATION_BYTES),
+                  0);
+        ASSERT_GT(physical_size, first_end);
+      }
+      // Flush rotates and seals the old WAL without requiring a sync write.
+      ASSERT_OK(Flush());
+      ASSERT_NE(first_log, dbfull()->TEST_LogfileNumber());
+      ASSERT_OK(options.env->GetFileSize(first_path, &physical_size));
+      ASSERT_EQ(first_end, physical_size);
+
+      WriteOptions write_options;
+      write_options.sync = true;
+      ASSERT_OK(db_->Put(write_options, "last", "value"));
+      ASSERT_OK(db_->GetCurrentWalFile(&live));
+      const std::string last_path = LogFileName(dbname_, live->LogNumber());
+      const uint64_t last_end = live->SizeFileBytes();
+      ASSERT_GT(last_end, 0);
+      ASSERT_OK(db_->SyncWAL());
+      ASSERT_OK(db_->Close());
+      ASSERT_OK(options.env->GetFileSize(last_path, &physical_size));
+      ASSERT_EQ(last_end, physical_size);
+      Reopen(options);
+      ASSERT_EQ("value", Get("last"));
+    }
+  }
+}
+
+TEST_F(DBWALTest, ZeroRangeRotationWaitsForConcurrentSync) {
+  Options options = CurrentOptions();
+  options.env = Env::Default();
+  if (!options.env->GetFileSystem()->SupportsZeroRangePreallocation()) {
+    return;
+  }
+  options.enable_zero_range_preallocation = true;
+  options.two_write_queues = true;
+  options.track_and_verify_wals_in_manifest = true;
+  DestroyAndReopen(options);
+  ASSERT_OK(db_->DisableFileDeletions());
+  ASSERT_OK(Put("before", "sync"));
+  std::unique_ptr<LogFile> live;
+  ASSERT_OK(db_->GetCurrentWalFile(&live));
+  const std::string old_path = LogFileName(dbname_, live->LogNumber());
+  const uint64_t old_end = live->SizeFileBytes();
+  std::atomic<bool> syncing{false};
+  std::atomic<bool> rotating{false};
+  auto* sync_point = SyncPoint::GetInstance();
+  sync_point->SetCallBack("DBImpl::SyncWAL:BeforeMarkLogsSynced:1", [&](void*) {
+    syncing.store(true);
+    while (!rotating.load()) {
+      std::this_thread::yield();
+    }
+  });
+  sync_point->SetCallBack("DBImpl::SwitchMemtable:WaitingForSync",
+                          [&](void*) { rotating.store(true); });
+  sync_point->EnableProcessing();
+  port::Thread sync_thread([&] { ASSERT_OK(db_->SyncWAL()); });
+  while (!syncing.load()) {
+    std::this_thread::yield();
+  }
+  ASSERT_OK(Flush());
+  sync_thread.join();
+  sync_point->DisableProcessing();
+  sync_point->ClearAllCallBacks();
+  ASSERT_TRUE(rotating.load());
+  uint64_t physical_size;
+  ASSERT_OK(options.env->GetFileSize(old_path, &physical_size));
+  ASSERT_EQ(old_end, physical_size);
+  ASSERT_OK(Put("after", "rotation"));
+  ASSERT_OK(db_->SyncWAL());
+  Reopen(options);
+  ASSERT_EQ("rotation", Get("after"));
+}
+
+TEST_F(DBWALTest, ZeroRangeWALTruncateErrorsReachCaller) {
+  class TruncateErrorFS : public FileSystemWrapper {
+   public:
+    explicit TruncateErrorFS(const std::shared_ptr<FileSystem>& target)
+        : FileSystemWrapper(target) {}
+    bool fail_truncate = false;
+    bool SupportsZeroRangePreallocation() const override {
+      return target()->SupportsZeroRangePreallocation();
+    }
+    IOStatus NewWritableFile(const std::string& name, const FileOptions& options,
+                             std::unique_ptr<FSWritableFile>* result,
+                             IODebugContext* dbg) override {
+      IOStatus status = target()->NewWritableFile(name, options, result, dbg);
+      if (status.ok() && name.size() >= 4 &&
+          name.compare(name.size() - 4, 4, ".log") == 0) {
+        class ErrorFile : public FSWritableFileOwnerWrapper {
+         public:
+          ErrorFile(std::unique_ptr<FSWritableFile>&& file, bool* fail)
+              : FSWritableFileOwnerWrapper(std::move(file)), fail_(fail) {}
+          IOStatus Truncate(uint64_t size, const IOOptions& io_options,
+                            IODebugContext* context) override {
+            if (*fail_) return IOStatus::IOError("injected WAL truncate error");
+            return target()->Truncate(size, io_options, context);
+          }
+
+         private:
+          bool* fail_;
+        };
+        result->reset(new ErrorFile(std::move(*result), &fail_truncate));
+      }
+      return status;
+    }
+  };
+  auto fs = std::make_shared<TruncateErrorFS>(Env::Default()->GetFileSystem());
+  if (!fs->SupportsZeroRangePreallocation()) return;
+  auto test_env = NewCompositeEnv(fs);
+  const Options original = CurrentOptions();
+  Options options = original;
+  options.env = test_env.get();
+  options.enable_zero_range_preallocation = true;
+  for (bool rotate : {false, true}) {
+    DestroyAndReopen(options);
+    ASSERT_OK(Put("key", "value"));
+    const uint64_t number = dbfull()->TEST_LogfileNumber();
+    fs->fail_truncate = true;
+    if (rotate) {
+      ASSERT_NOK(Flush());
+      ASSERT_EQ(number, dbfull()->TEST_LogfileNumber());
+      ASSERT_NOK(Put("rejected", "value"));
+    }
+    ASSERT_NOK(db_->Close());
+    fs->fail_truncate = false;
+    Reopen(options);
+    ASSERT_EQ("value", Get("key"));
+  }
+  // Release DB references before destroying the per-test Env.
+  DestroyAndReopen(original);
+}
+
 // A SpecialEnv enriched to give more insight about deleted files
 class EnrichedSpecialEnv : public SpecialEnv {
  public:

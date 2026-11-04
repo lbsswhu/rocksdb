@@ -7,6 +7,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 #include <cinttypes>
+#include <limits>
 
 #include "db/db_impl/db_impl.h"
 #include "db/error_handler.h"
@@ -1134,7 +1135,16 @@ IOStatus DBImpl::WriteToWAL(const WriteThread::WriteGroup& write_group,
     }
 
     for (auto& log : logs_) {
-      io_s = log.writer->file()->Sync(immutable_db_options_.use_fsync);
+      if (log.writer->UsesZeroRangePreallocation()) {
+        io_s = log.writer->WriteBuffer();
+        if (io_s.ok()) {
+          log.synced_size_snapshot = log.writer->ReadableEnd();
+          io_s = log.writer->file()->SyncWithoutFlush(
+              immutable_db_options_.use_fsync);
+        }
+      } else {
+        io_s = log.writer->file()->Sync(immutable_db_options_.use_fsync);
+      }
       if (!io_s.ok()) {
         break;
       }
@@ -1829,12 +1839,22 @@ Status DBImpl::SwitchMemtable(ColumnFamilyData* cfd, WriteContext* context) {
     log_recycle_files_.pop_front();
   }
   if (s.ok() && creating_new_log) {
+    // Seal must precede the next sync of the old WAL's final length. Wait
+    // without log_write_mutex_: completion needs mutex_ -> log_write_mutex_.
+    while (!logs_.empty() &&
+           logs_.back().writer->UsesZeroRangePreallocation() &&
+           logs_.back().getting_synced) {
+      TEST_SYNC_POINT("DBImpl::SwitchMemtable:WaitingForSync");
+      log_sync_cv_.Wait();
+    }
     log_write_mutex_.Lock();
     assert(new_log != nullptr);
     if (!logs_.empty()) {
       // Alway flush the buffer of the last log before switching to a new one
       log::Writer* cur_log_writer = logs_.back().writer;
-      io_s = cur_log_writer->WriteBuffer();
+      io_s = cur_log_writer->UsesZeroRangePreallocation()
+                 ? cur_log_writer->Seal()
+                 : cur_log_writer->WriteBuffer();
       if (s.ok()) {
         s = io_s;
       }
@@ -1860,6 +1880,14 @@ Status DBImpl::SwitchMemtable(ColumnFamilyData* cfd, WriteContext* context) {
     // how do we fail if we're not creating new log?
     assert(creating_new_log);
     delete new_mem;
+    if (new_log != nullptr) {
+      new_log->Close(immutable_db_options_.use_fsync).PermitUncheckedError();
+      wal_manager_.UnregisterWalReadBoundary(new_log_number);
+      fs_->DeleteFile(LogFileName(immutable_db_options_.GetWalDir(),
+                                  new_log_number),
+                      IOOptions(), nullptr)
+          .PermitUncheckedError();
+    }
     delete new_log;
     context->superversion_context.new_superversion.reset();
     // We may have lost data from the WritableFileBuffer in-memory buffer for
@@ -1961,8 +1989,13 @@ Status DBImpl::SwitchMemtable(ColumnFamilyData* cfd, WriteContext* context) {
 
 size_t DBImpl::GetWalPreallocateBlockSize(uint64_t write_buffer_size) const {
   mutex_.AssertHeld();
-  size_t bsize =
-      static_cast<size_t>(write_buffer_size / 10 + write_buffer_size);
+  const uint64_t limit = std::numeric_limits<size_t>::max();
+  // Saturate before applying the existing capacity limits. CreateWAL checks
+  // the final value against the offset and alignment limits in the new mode.
+  size_t bsize = static_cast<size_t>(
+      write_buffer_size > limit || write_buffer_size / 10 > limit - write_buffer_size
+          ? limit
+          : write_buffer_size / 10 + write_buffer_size);
   // Some users might set very high write_buffer_size and rely on
   // max_total_wal_size or other parameters to control the WAL size.
   if (mutable_db_options_.max_total_wal_size > 0) {

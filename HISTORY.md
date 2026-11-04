@@ -1,4 +1,10 @@
 # Rocksdb Change Lo
+## Unreleased
+### New Features
+* Add `DBOptions::enable_zero_range_preallocation` (default true) for supported local POSIX WAL and SST creation. ZERO_RANGE reserves unwritten tails on demand; files are truncated to their logical length before final synchronization. `allow_fallocate=false`, mmap/custom file systems without the capability, unsupported platforms, and WAL recycling keep the legacy allocation protocol.
+### Compatibility
+* Primaries with Secondary or other cross-process active-WAL tailers must set `enable_zero_range_preallocation=false`. Same-process `GetUpdatesSince()` and checkpoint/backup use complete-record readable prefixes. Close normally and verify WALs are truncated before downgrading to an older RocksDB; the new recovery reader accepts validated crash zero tails even when the writing option is disabled. Env/FS virtual interfaces changed, so dependent plugins require a full rebuild.
+
 ## 6.26.1 (2021-11-18)
 ### Bug Fixes
 * Fix builds for some platforms.

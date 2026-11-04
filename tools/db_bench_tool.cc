@@ -747,6 +747,9 @@ DEFINE_bool(finish_after_writes, false, "Write thread terminates after all write
 DEFINE_bool(sync, false, "Sync all writes to disk");
 
 DEFINE_bool(use_fsync, false, "If true, issue fsync instead of fdatasync");
+DEFINE_bool(enable_zero_range_preallocation,
+            ROCKSDB_NAMESPACE::DBOptions().enable_zero_range_preallocation,
+            "Preallocate new WAL/SST tails with ZERO_RANGE when supported");
 
 DEFINE_bool(disable_wal, false, "If true, do not write WAL for write.");
 
@@ -1937,6 +1940,17 @@ struct DBWithColumnFamilies {
     std::for_each(cfh.begin(), cfh.end(),
                   [](ColumnFamilyHandle* cfhi) { delete cfhi; });
     cfh.clear();
+    if (db != nullptr) {
+      const uint64_t begin = FLAGS_env->NowMicros();
+      Status close_status = db->Close();
+      fprintf(stdout, "db_close_micros=%" PRIu64 " status=%s\n",
+              FLAGS_env->NowMicros() - begin, close_status.ToString().c_str());
+      if (!close_status.ok()) {
+        fprintf(stderr, "DB::Close failed: %s\n",
+                close_status.ToString().c_str());
+        exit(1);
+      }
+    }
 #ifndef ROCKSDB_LITE
     if (opt_txn_db) {
       delete opt_txn_db;
@@ -2379,6 +2393,9 @@ class Stats {
             (long)throughput,
             (extra.empty() ? "" : " "),
             extra.c_str());
+    fprintf(stdout, "benchmark_operations=%" PRIu64
+                    " benchmark_wall_micros=%.0f\n",
+            static_cast<uint64_t>(done_), elapsed * 1e6);
     if (FLAGS_histogram) {
       for (auto it = hist_.begin(); it != hist_.end(); ++it) {
         fprintf(stdout, "Microseconds per %s:\n%s\n",
@@ -3061,8 +3078,8 @@ class Benchmark {
 
   void DeleteDBs() {
     db_.DeleteDBs();
-    for (const DBWithColumnFamilies& dbwcf : multi_dbs_) {
-      delete dbwcf.db;
+    for (auto& dbwcf : multi_dbs_) {
+      dbwcf.DeleteDBs();
     }
   }
 
@@ -3638,6 +3655,8 @@ class Benchmark {
     }
 #endif  // ROCKSDB_LITE
 
+    // Include the last WAL's sealing, truncation and sync in final statistics.
+    DeleteDBs();
     if (FLAGS_statistics) {
       fprintf(stdout, "STATISTICS:\n%s\n", dbstats->ToString().c_str());
     }
@@ -4000,6 +4019,8 @@ class Benchmark {
     options.random_access_max_buffer_size = FLAGS_random_access_max_buffer_size;
     options.writable_file_max_buffer_size = FLAGS_writable_file_max_buffer_size;
     options.use_fsync = FLAGS_use_fsync;
+    options.enable_zero_range_preallocation =
+        FLAGS_enable_zero_range_preallocation;
     options.num_levels = FLAGS_num_levels;
     options.target_file_size_base = FLAGS_target_file_size_base;
     options.target_file_size_multiplier = FLAGS_target_file_size_multiplier;
@@ -7720,12 +7741,22 @@ class Benchmark {
   }
 
   void CompactAll() {
+    const uint64_t begin = FLAGS_env->NowMicros();
+    auto compact = [](DB* db) {
+      Status status = db->CompactRange(CompactRangeOptions(), nullptr, nullptr);
+      if (!status.ok()) {
+        fprintf(stderr, "CompactRange failed: %s\n", status.ToString().c_str());
+        exit(1);
+      }
+    };
     if (db_.db != nullptr) {
-      db_.db->CompactRange(CompactRangeOptions(), nullptr, nullptr);
+      compact(db_.db);
     }
     for (const auto& db_with_cfh : multi_dbs_) {
-      db_with_cfh.db->CompactRange(CompactRangeOptions(), nullptr, nullptr);
+      compact(db_with_cfh.db);
     }
+    fprintf(stdout, "compactall_micros=%" PRIu64 "\n",
+            FLAGS_env->NowMicros() - begin);
   }
 
 #ifndef ROCKSDB_LITE
@@ -7737,40 +7768,46 @@ class Benchmark {
     std::vector<std::string> keys = {DB::Properties::kMemTableFlushPending,
                                      DB::Properties::kNumRunningFlushes,
                                      DB::Properties::kCompactionPending,
-                                     DB::Properties::kNumRunningCompactions};
+                                     DB::Properties::kNumRunningCompactions,
+                                     DB::Properties::kNumImmutableMemTable};
 
     fprintf(stdout, "waitforcompaction(%s): started\n",
             db.db->GetName().c_str());
 
-    while (true) {
+    const uint64_t begin = FLAGS_env->NowMicros();
+    unsigned idle_samples = 0;
+    while (idle_samples < 3) {
       bool retry = false;
 
       for (const auto& k : keys) {
-        uint64_t v;
-        if (!db.db->GetIntProperty(k, &v)) {
+        uint64_t v = 0;
+        if (!db.db->GetAggregatedIntProperty(k, &v)) {
           fprintf(stderr, "waitforcompaction(%s): GetIntProperty(%s) failed\n",
                   db.db->GetName().c_str(), k.c_str());
           exit(1);
         } else if (v > 0) {
-          fprintf(stdout,
-                  "waitforcompaction(%s): active(%s). Sleep 10 seconds\n",
-                  db.db->GetName().c_str(), k.c_str());
-          FLAGS_env->SleepForMicroseconds(10 * 1000000);
           retry = true;
           break;
         }
       }
 
-      if (!retry) {
-        fprintf(stdout, "waitforcompaction(%s): finished\n",
-                db.db->GetName().c_str());
-        return;
+      idle_samples = retry ? 0 : idle_samples + 1;
+      if (FLAGS_env->NowMicros() - begin > 300000000) {
+        fprintf(stderr, "waitforcompaction timeout after 300 seconds\n");
+        exit(1);
       }
+      if (idle_samples < 3) FLAGS_env->SleepForMicroseconds(100000);
     }
+    fprintf(stdout,
+            "waitforcompaction(%s): finished drain_micros=%" PRIu64
+            " idle_samples=%u\n",
+            db.db->GetName().c_str(), FLAGS_env->NowMicros() - begin,
+            idle_samples);
   }
 
   void WaitForCompaction() {
     // Give background threads a chance to wake
+    const uint64_t begin = FLAGS_env->NowMicros();
     FLAGS_env->SleepForMicroseconds(5 * 1000000);
 
     // I am skeptical that this check race free. I hope that checking twice
@@ -7784,6 +7821,10 @@ class Benchmark {
         WaitForCompactionHelper(db_with_cfh);
       }
     }
+    fprintf(stdout,
+            "waitforcompaction_total_micros=%" PRIu64
+            " fixed_wait_micros=5000000\n",
+            FLAGS_env->NowMicros() - begin);
   }
 
   bool CompactLevelHelper(DBWithColumnFamilies& db_with_cfh, int from_level) {
@@ -7868,25 +7909,30 @@ class Benchmark {
 #endif
 
   void Flush() {
+    const uint64_t begin = FLAGS_env->NowMicros();
     FlushOptions flush_opt;
     flush_opt.wait = true;
 
     if (db_.db != nullptr) {
-      Status s = db_.db->Flush(flush_opt, db_.cfh);
+      Status s = db_.cfh.empty() ? db_.db->Flush(flush_opt)
+                                 : db_.db->Flush(flush_opt, db_.cfh);
       if (!s.ok()) {
         fprintf(stderr, "Flush failed: %s\n", s.ToString().c_str());
         exit(1);
       }
     } else {
       for (const auto& db_with_cfh : multi_dbs_) {
-        Status s = db_with_cfh.db->Flush(flush_opt, db_with_cfh.cfh);
+        Status s = db_with_cfh.cfh.empty()
+                       ? db_with_cfh.db->Flush(flush_opt)
+                       : db_with_cfh.db->Flush(flush_opt, db_with_cfh.cfh);
         if (!s.ok()) {
           fprintf(stderr, "Flush failed: %s\n", s.ToString().c_str());
           exit(1);
         }
       }
     }
-    fprintf(stdout, "flush memtable\n");
+    fprintf(stdout, "flush memtable flush_micros=%" PRIu64 "\n",
+            FLAGS_env->NowMicros() - begin);
   }
 
   void ResetStats() {

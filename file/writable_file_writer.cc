@@ -10,6 +10,7 @@
 #include "file/writable_file_writer.h"
 
 #include <algorithm>
+#include <limits>
 #include <mutex>
 
 #include "db/version_edit.h"
@@ -21,6 +22,7 @@
 #include "util/crc32c.h"
 #include "util/random.h"
 #include "util/rate_limiter.h"
+#include "util/stop_watch.h"
 
 namespace ROCKSDB_NAMESPACE {
 IOStatus WritableFileWriter::Create(const std::shared_ptr<FileSystem>& fs,
@@ -36,24 +38,106 @@ IOStatus WritableFileWriter::Create(const std::shared_ptr<FileSystem>& fs,
   return io_s;
 }
 
+IOStatus WritableFileWriter::RememberError(const IOStatus& status) {
+  if (!status.ok() && first_error_.ok()) {
+    first_error_ = status;
+  }
+  return status;
+}
+
+IOStatus WritableFileWriter::PrepareAppend(uint64_t offset, size_t len) {
+  if (!zero_range_preallocation_) {
+    writable_file_->PrepareWrite(static_cast<size_t>(offset), len, IOOptions(),
+                                 nullptr);
+    return IOStatus::OK();
+  }
+  if (len == 0) return IOStatus::OK();
+  size_t block_size = 0, ignored = 0;
+  writable_file_->GetPreallocationStatus(&block_size, &ignored);
+  const uint64_t limit =
+      static_cast<uint64_t>(std::numeric_limits<int64_t>::max());
+  const uint64_t alignment = writable_file_->GetRequiredBufferAlignment();
+  auto align_up = [limit](uint64_t value, uint64_t unit,
+                          uint64_t* result) -> bool {
+    if (unit == 0 || value > limit) return false;
+    uint64_t extra = value % unit == 0 ? 0 : unit - value % unit;
+    if (extra > limit - value) return false;
+    *result = value + extra;
+    return true;
+  };
+  uint64_t granularity = 0, end = 0;
+  if (block_size == 0 || !align_up(block_size, alignment, &granularity) ||
+      offset > limit || len > limit - offset ||
+      !align_up(offset + len, granularity, &end)) {
+    return IOStatus::InvalidArgument(
+        "Preallocation range overflow or zero granularity");
+  }
+  if (end <= reserved_end_) return IOStatus::OK();
+  // Every Direct I/O write (including padding) is covered by a prior aligned
+  // reservation. Never restart allocation at a logical offset within that page.
+  needs_final_truncate_ = true;
+  const auto previous_mode = writable_file_->GetPreallocationMode();
+  const bool zero_attempt = previous_mode == PreallocationMode::kZeroRange;
+  if (zero_attempt) RecordTick(stats_, ZERO_RANGE_PREALLOCATION_CALLS);
+  StopWatch timer(clock_ ? clock_ : SystemClock::Default().get(),
+                  zero_attempt ? stats_ : nullptr,
+                  ZERO_RANGE_PREALLOCATION_MICROS);
+  IOStatus status = writable_file_->Allocate(reserved_end_, end - reserved_end_,
+                                             IOOptions(), nullptr);
+  if (previous_mode == PreallocationMode::kZeroRange &&
+      writable_file_->GetPreallocationMode() == PreallocationMode::kLegacy) {
+    RecordTick(stats_, ZERO_RANGE_PREALLOCATION_FALLBACKS);
+  }
+  if (status.ok()) {
+    if (writable_file_->GetPreallocationMode() ==
+        PreallocationMode::kZeroRange) {
+      RecordTick(stats_, ZERO_RANGE_PREALLOCATION_BYTES, end - reserved_end_);
+      uint32_t calls = ZERO_RANGE_PREALLOCATION_OTHER_SST_CALLS;
+      uint32_t bytes = ZERO_RANGE_PREALLOCATION_OTHER_SST_BYTES;
+      switch (preallocation_source_) {
+        case PreallocationSource::kWal:
+          calls = ZERO_RANGE_PREALLOCATION_WAL_CALLS;
+          bytes = ZERO_RANGE_PREALLOCATION_WAL_BYTES;
+          break;
+        case PreallocationSource::kFlush:
+          calls = ZERO_RANGE_PREALLOCATION_FLUSH_CALLS;
+          bytes = ZERO_RANGE_PREALLOCATION_FLUSH_BYTES;
+          break;
+        case PreallocationSource::kCompaction:
+          calls = ZERO_RANGE_PREALLOCATION_COMPACTION_CALLS;
+          bytes = ZERO_RANGE_PREALLOCATION_COMPACTION_BYTES;
+          break;
+        case PreallocationSource::kOtherSst:
+          break;
+      }
+      RecordTick(stats_, calls);
+      RecordTick(stats_, bytes, end - reserved_end_);
+    }
+    reserved_end_ = end;
+  } else {
+    if (zero_attempt) RecordTick(stats_, ZERO_RANGE_PREALLOCATION_FAILURES);
+  }
+  return status;
+}
+
 IOStatus WritableFileWriter::Append(const Slice& data,
                                     uint32_t crc32c_checksum) {
   const char* src = data.data();
   size_t left = data.size();
+  if (!first_error_.ok()) return first_error_;
+  if (sealing_ || sealed_ || closed_) {
+    return IOStatus::InvalidArgument("Append after file seal/close");
+  }
   IOStatus s;
-  pending_sync_ = true;
-
-  TEST_KILL_RANDOM_WITH_WEIGHT("WritableFileWriter::Append:0", REDUCE_ODDS2);
-
-  // Calculate the checksum of appended data
-  UpdateFileChecksum(data);
-
   {
     IOSTATS_TIMER_GUARD(prepare_write_nanos);
     TEST_SYNC_POINT("WritableFileWriter::Append:BeforePrepareWrite");
-    writable_file_->PrepareWrite(static_cast<size_t>(GetFileSize()), left,
-                                 IOOptions(), nullptr);
+    s = PrepareAppend(GetFileSize(), left);
   }
+  if (!s.ok()) return RememberError(s);
+  pending_sync_ = true;
+  TEST_KILL_RANDOM_WITH_WEIGHT("WritableFileWriter::Append:0", REDUCE_ODDS2);
+  UpdateFileChecksum(data);
 
   // See whether we need to enlarge the buffer to avoid the flush
   if (buf_.Capacity() - buf_.CurrentSize() < left) {
@@ -156,10 +240,16 @@ IOStatus WritableFileWriter::Append(const Slice& data,
   if (s.ok()) {
     filesize_ += data.size();
   }
-  return s;
+  return RememberError(s);
 }
 
 IOStatus WritableFileWriter::Pad(const size_t pad_bytes) {
+  if (!first_error_.ok()) return first_error_;
+  if (sealing_ || sealed_ || closed_) {
+    return IOStatus::InvalidArgument("Pad after file seal/close");
+  }
+  IOStatus prepare = PrepareAppend(filesize_, pad_bytes);
+  if (!prepare.ok()) return RememberError(prepare);
   assert(pad_bytes < kDefaultPageSize);
   size_t left = pad_bytes;
   size_t cap = buf_.Capacity() - buf_.CurrentSize();
@@ -190,96 +280,97 @@ IOStatus WritableFileWriter::Pad(const size_t pad_bytes) {
   return IOStatus::OK();
 }
 
+IOStatus WritableFileWriter::Seal() {
+  if (!first_error_.ok()) return first_error_;
+  if (sealed_) return IOStatus::OK();
+  if (closed_ || sealing_) return IOStatus::InvalidArgument("File is not open");
+  sealing_ = true;
+  IOStatus status = Flush();
+  if (!status.ok()) return RememberError(status);
+  if (zero_range_preallocation_ || needs_final_truncate_ || use_direct_io()) {
+    RecordTick(stats_, PREALLOCATION_TRUNCATE_CALLS);
+    StopWatch timer(clock_ ? clock_ : SystemClock::Default().get(), stats_,
+                    PREALLOCATION_TRUNCATE_MICROS);
+#ifndef ROCKSDB_LITE
+    auto start = FileOperationInfo::StartNow();
+#endif
+    status = writable_file_->Truncate(filesize_, IOOptions(), nullptr);
+#ifndef ROCKSDB_LITE
+    if (ShouldNotifyListeners()) {
+      NotifyOnFileTruncateFinish(start, FileOperationInfo::FinishNow(), status);
+    }
+#endif
+    if (!status.ok()) {
+      RecordTick(stats_, PREALLOCATION_TRUNCATE_FAILURES);
+      return RememberError(status);
+    }
+    needs_final_truncate_ = false;
+    final_truncate_pending_sync_ = true;
+    pending_sync_ = true;
+  }
+  sealed_ = true;
+  // Direct I/O Flush retains a tail for subsequent appends. It must never be
+  // rewritten after the final truncate.
+  buf_.Size(0);
+  return IOStatus::OK();
+}
+
+IOStatus WritableFileWriter::FinishAndClose(bool use_fsync) {
+  if (closed_) return close_status_;
+  IOStatus status = Seal();
+  if (status.ok()) {
+    // A final size change requires a real sync, including Direct I/O files.
+    status = SyncInternal(use_fsync);
+    if (status.ok()) {
+      pending_sync_ = false;
+      final_truncate_pending_sync_ = false;
+    }
+    RememberError(status).PermitUncheckedError();
+  }
+  return Close();
+}
+
 IOStatus WritableFileWriter::Close() {
-  // Do not quit immediately on failure the file MUST be closed
-  IOStatus s;
-
-  // Possible to close it twice now as we MUST close
-  // in __dtor, simply flushing is not enough
-  // Windows when pre-allocating does not fill with zeros
-  // also with unbuffered access we also set the end of data.
-  if (writable_file_.get() == nullptr) {
-    return s;
+  if (closed_) return close_status_;
+  if (writable_file_.get() == nullptr) return IOStatus::OK();
+  if (first_error_.ok() && !sealed_) {
+    RememberError(Seal()).PermitUncheckedError();
   }
-
-  s = Flush();  // flush cache to OS
-
-  IOStatus interim;
-  // In direct I/O mode we write whole pages so
-  // we need to let the file know where data ends.
-  if (use_direct_io()) {
-    {
-#ifndef ROCKSDB_LITE
-      FileOperationInfo::StartTimePoint start_ts;
-      if (ShouldNotifyListeners()) {
-        start_ts = FileOperationInfo::StartNow();
-      }
-#endif
-      interim = writable_file_->Truncate(filesize_, IOOptions(), nullptr);
-#ifndef ROCKSDB_LITE
-      if (ShouldNotifyListeners()) {
-        auto finish_ts = FileOperationInfo::FinishNow();
-        NotifyOnFileTruncateFinish(start_ts, finish_ts, s);
-      }
-#endif
-    }
-    if (interim.ok()) {
-      {
-#ifndef ROCKSDB_LITE
-        FileOperationInfo::StartTimePoint start_ts;
-        if (ShouldNotifyListeners()) {
-          start_ts = FileOperationInfo::StartNow();
-        }
-#endif
-        interim = writable_file_->Fsync(IOOptions(), nullptr);
-#ifndef ROCKSDB_LITE
-        if (ShouldNotifyListeners()) {
-          auto finish_ts = FileOperationInfo::FinishNow();
-          NotifyOnFileSyncFinish(start_ts, finish_ts, s,
-                                 FileOperationType::kFsync);
-        }
-#endif
-      }
-    }
-    if (!interim.ok() && s.ok()) {
-      s = interim;
-    }
+  // Preserve historical Direct I/O Close durability, but never rewrite a tail.
+  if (first_error_.ok() && final_truncate_pending_sync_ && use_direct_io()) {
+    IOStatus sync = SyncInternal(true);
+    if (sync.ok()) final_truncate_pending_sync_ = false;
+    RememberError(sync).PermitUncheckedError();
   }
-
   TEST_KILL_RANDOM("WritableFileWriter::Close:0");
-  {
 #ifndef ROCKSDB_LITE
-    FileOperationInfo::StartTimePoint start_ts;
-    if (ShouldNotifyListeners()) {
-      start_ts = FileOperationInfo::StartNow();
-    }
+  auto start = FileOperationInfo::StartNow();
 #endif
-    interim = writable_file_->Close(IOOptions(), nullptr);
+  IOStatus status = writable_file_->Close(IOOptions(), nullptr);
 #ifndef ROCKSDB_LITE
-    if (ShouldNotifyListeners()) {
-      auto finish_ts = FileOperationInfo::FinishNow();
-      NotifyOnFileCloseFinish(start_ts, finish_ts, s);
-    }
+  if (ShouldNotifyListeners()) {
+    NotifyOnFileCloseFinish(start, FileOperationInfo::FinishNow(), status);
+  }
 #endif
-  }
-  if (!interim.ok() && s.ok()) {
-    s = interim;
-  }
-
+  RememberError(status).PermitUncheckedError();
   writable_file_.reset();
+  closed_ = true;
+  close_status_ = first_error_;
   TEST_KILL_RANDOM("WritableFileWriter::Close:1");
-
-  if (s.ok() && checksum_generator_ != nullptr && !checksum_finalized_) {
+  if (close_status_.ok() && checksum_generator_ != nullptr &&
+      !checksum_finalized_) {
     checksum_generator_->Finalize();
     checksum_finalized_ = true;
   }
-
-  return s;
+  return close_status_;
 }
 
 // write out the cached data to the OS cache or storage if direct I/O
 // enabled
 IOStatus WritableFileWriter::Flush() {
+  if (!first_error_.ok()) return first_error_;
+  if (sealed_) return IOStatus::OK();
+  if (closed_) return close_status_;
   IOStatus s;
   TEST_KILL_RANDOM_WITH_WEIGHT("WritableFileWriter::Flush:0", REDUCE_ODDS2);
 
@@ -302,7 +393,7 @@ IOStatus WritableFileWriter::Flush() {
       }
     }
     if (!s.ok()) {
-      return s;
+      return RememberError(s);
     }
   }
 
@@ -323,7 +414,7 @@ IOStatus WritableFileWriter::Flush() {
   }
 
   if (!s.ok()) {
-    return s;
+    return RememberError(s);
   }
 
   // sync OS cache to disk for every bytes_per_sync_
@@ -353,7 +444,7 @@ IOStatus WritableFileWriter::Flush() {
     }
   }
 
-  return s;
+  return RememberError(s);
 }
 
 std::string WritableFileWriter::GetFileChecksum() {
@@ -374,19 +465,21 @@ const char* WritableFileWriter::GetFileChecksumFuncName() const {
 }
 
 IOStatus WritableFileWriter::Sync(bool use_fsync) {
+  if (closed_) return close_status_;
   IOStatus s = Flush();
   if (!s.ok()) {
     return s;
   }
   TEST_KILL_RANDOM("WritableFileWriter::Sync:0");
-  if (!use_direct_io() && pending_sync_) {
+  if (final_truncate_pending_sync_ || (!use_direct_io() && pending_sync_)) {
     s = SyncInternal(use_fsync);
     if (!s.ok()) {
-      return s;
+      return RememberError(s);
     }
   }
   TEST_KILL_RANDOM("WritableFileWriter::Sync:1");
   pending_sync_ = false;
+  final_truncate_pending_sync_ = false;
   return IOStatus::OK();
 }
 
@@ -405,6 +498,10 @@ IOStatus WritableFileWriter::SyncWithoutFlush(bool use_fsync) {
 IOStatus WritableFileWriter::SyncInternal(bool use_fsync) {
   IOStatus s;
   IOSTATS_TIMER_GUARD(fsync_nanos);
+  if (sealed_) RecordTick(stats_, PREALLOCATION_FINAL_SYNC_CALLS);
+  StopWatch final_timer(clock_ ? clock_ : SystemClock::Default().get(),
+                        sealed_ ? stats_ : nullptr,
+                        PREALLOCATION_FINAL_SYNC_MICROS);
   TEST_SYNC_POINT("WritableFileWriter::SyncInternal:0");
   auto prev_perf_level = GetPerfLevel();
   IOSTATS_CPU_TIMER_GUARD(cpu_write_nanos, clock_);

@@ -9,6 +9,7 @@
 
 #include "db/log_reader.h"
 #include "db/version_set.h"
+#include "db/wal_read_boundary.h"
 #include "file/filename.h"
 #include "logging/logging.h"
 #include "options/db_options.h"
@@ -64,7 +65,8 @@ class TransactionLogIteratorImpl : public TransactionLogIterator {
       const TransactionLogIterator::ReadOptions& read_options,
       const EnvOptions& soptions, const SequenceNumber seqNum,
       std::unique_ptr<VectorLogPtr> files, VersionSet const* const versions,
-      const bool seq_per_batch, const std::shared_ptr<IOTracer>& io_tracer);
+      const bool seq_per_batch, const std::shared_ptr<IOTracer>& io_tracer,
+      std::shared_ptr<WalReadBoundaryRegistry> wal_read_boundaries = nullptr);
 
   virtual bool Valid() override;
 
@@ -75,6 +77,7 @@ class TransactionLogIteratorImpl : public TransactionLogIterator {
   virtual BatchResult GetBatch() override;
 
  private:
+  std::shared_ptr<WalReadBoundaryRegistry> wal_read_boundaries_;
   const std::string& dir_;
   const ImmutableDBOptions* options_;
   const TransactionLogIterator::ReadOptions read_options_;

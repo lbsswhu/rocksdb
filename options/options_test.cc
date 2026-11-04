@@ -48,6 +48,22 @@ namespace ROCKSDB_NAMESPACE {
 class OptionsTest : public testing::Test {};
 
 #ifndef ROCKSDB_LITE  // GetOptionsFromMap is not supported in ROCKSDB_LITE
+TEST_F(OptionsTest, ZeroRangePreallocationOptionRoundTrip) {
+  ConfigOptions config;
+  DBOptions defaults, disabled, restored;
+  std::string serialized;
+  ASSERT_OK(GetStringFromDBOptions(config, defaults, &serialized));
+  ASSERT_NE(std::string::npos,
+            serialized.find("enable_zero_range_preallocation=true"));
+  ASSERT_OK(GetDBOptionsFromString(
+      config, defaults, "enable_zero_range_preallocation=false", &disabled));
+  ASSERT_OK(GetStringFromDBOptions(config, disabled, &serialized));
+  ASSERT_NE(std::string::npos,
+            serialized.find("enable_zero_range_preallocation=false"));
+  ASSERT_OK(GetDBOptionsFromString(config, defaults, serialized, &restored));
+  ASSERT_OK(RocksDBOptionsParser::VerifyDBOptions(config, disabled, restored));
+}
+
 TEST_F(OptionsTest, GetOptionsFromMapTest) {
   std::unordered_map<std::string, std::string> cf_options_map = {
       {"write_buffer_size", "1"},

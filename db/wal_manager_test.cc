@@ -165,6 +165,40 @@ TEST_F(WalManagerTest, ReadFirstRecordCache) {
   // ASSERT_EQ(env_->sequential_read_counter_.Read(), 1);
 }
 
+TEST_F(WalManagerTest, ActiveFirstRecordRetriesAfterPublication) {
+  Init();
+  const std::string path = LogFileName(dbname_, 1);
+  std::unique_ptr<FSWritableFile> file;
+  ASSERT_OK(env_->GetFileSystem()->NewWritableFile(path, FileOptions(), &file,
+                                                   nullptr));
+  std::unique_ptr<WritableFileWriter> file_writer(
+      new WritableFileWriter(std::move(file), path, FileOptions()));
+  log::Writer writer(std::move(file_writer), 1, false);
+  auto boundary = std::make_shared<WalReadBoundary>();
+  wal_manager_->RegisterWalReadBoundary(1, boundary);
+  WriteBatch batch;
+  ASSERT_OK(batch.Put("foo", "bar"));
+  WriteBatchInternal::SetSequence(&batch, 10);
+  ASSERT_OK(writer.AddRecord(WriteBatchInternal::Contents(&batch)));
+  SequenceNumber sequence = 99;
+  ASSERT_OK(wal_manager_->TEST_ReadFirstRecord(kAliveLogFile, 1, &sequence));
+  ASSERT_EQ(0U, sequence);
+  std::unique_ptr<LogFile> current;
+  ASSERT_OK(wal_manager_->GetLiveWalFile(1, &current));
+  ASSERT_EQ(0U, current->SizeFileBytes());
+  uint64_t physical_size;
+  ASSERT_OK(env_->GetFileSize(path, &physical_size));
+  ASSERT_GT(physical_size, 0U);
+  boundary->readable_end.store(physical_size, std::memory_order_release);
+  ASSERT_OK(wal_manager_->TEST_ReadFirstRecord(kAliveLogFile, 1, &sequence));
+  ASSERT_EQ(10U, sequence);
+  ASSERT_OK(wal_manager_->GetLiveWalFile(1, &current));
+  ASSERT_EQ(physical_size, current->SizeFileBytes());
+  wal_manager_->UnregisterWalReadBoundary(1);
+  ASSERT_EQ(nullptr, wal_manager_->GetWalReadBoundary(1));
+  ASSERT_EQ(physical_size, boundary->readable_end.load());
+}
+
 namespace {
 uint64_t GetLogDirSize(std::string dir_path, Env* env) {
   uint64_t dir_size = 0;

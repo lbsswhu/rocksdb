@@ -611,6 +611,26 @@ Status DBImpl::CloseHelper() {
     mutex_.Lock();
   }
 
+  // Report WAL finalization errors while every remaining writer is still
+  // owned here. Purging obsolete files below can release some of them.
+  auto close_wal = [&](log::Writer* writer) {
+    Status s = writer->Close(immutable_db_options_.use_fsync);
+    if (!s.ok()) {
+      ROCKS_LOG_WARN(immutable_db_options_.info_log,
+                     "Unable to close WAL #%" PRIu64 ": %s",
+                     writer->get_log_number(), s.ToString().c_str());
+      if (ret.ok()) {
+        ret = s;
+      }
+    }
+  };
+  for (auto* writer : logs_to_free_) {
+    close_wal(writer);
+  }
+  for (auto& log : logs_) {
+    close_wal(log.writer);
+  }
+
   // Clean up obsolete files due to SuperVersion release.
   // (1) Need to delete to obsolete files before closing because RepairDB()
   // scans all existing files in the file system and builds manifest file.
@@ -638,21 +658,12 @@ Status DBImpl::CloseHelper() {
     delete l;
   }
   for (auto& log : logs_) {
-    uint64_t log_number = log.writer->get_log_number();
-    Status s = log.ClearWriter();
-    if (!s.ok()) {
-      ROCKS_LOG_WARN(
-          immutable_db_options_.info_log,
-          "Unable to Sync WAL file %s with error -- %s",
-          LogFileName(immutable_db_options_.GetWalDir(), log_number).c_str(),
-          s.ToString().c_str());
-      // Retain the first error
-      if (ret.ok()) {
-        ret = s;
-      }
-    }
+    delete log.ReleaseWriter();
   }
   logs_.clear();
+  if (ret.ok()) {
+    ret = wal_finalization_status_;
+  }
 
   // Table cache may have table handles holding blocks from the block cache.
   // We need to release them before the block cache is destroyed. The block
@@ -1364,6 +1375,7 @@ Status DBImpl::SyncWAL() {
       auto& log = *it;
       assert(!log.getting_synced);
       log.getting_synced = true;
+      log.synced_size_snapshot = log.writer->ReadableEnd();
       logs_to_sync.push_back(log.writer);
     }
 
@@ -1435,11 +1447,19 @@ Status DBImpl::MarkLogsSynced(uint64_t up_to, bool synced_dir) {
   for (auto it = logs_.begin(); it != logs_.end() && it->number <= up_to;) {
     auto& wal = *it;
     assert(wal.getting_synced);
+    if (wal.writer->UsesZeroRangePreallocation() && logs_.size() > 1 &&
+        !wal.writer->IsSealed()) {
+      MarkLogsNotSynced(up_to);
+      return Status::Corruption("Releasing an unsealed ZERO_RANGE WAL");
+    }
     if (logs_.size() > 1) {
-      if (immutable_db_options_.track_and_verify_wals_in_manifest &&
-          wal.writer->file()->GetFileSize() > 0) {
-        synced_wals.AddWal(wal.number,
-                           WalMetadata(wal.writer->file()->GetFileSize()));
+      if (immutable_db_options_.track_and_verify_wals_in_manifest) {
+        const uint64_t synced_size = wal.writer->UsesZeroRangePreallocation()
+                                         ? wal.synced_size_snapshot
+                                         : wal.writer->file()->GetFileSize();
+        if (synced_size > 0) {
+          synced_wals.AddWal(wal.number, WalMetadata(synced_size));
+        }
       }
       logs_to_free_.push_back(wal.ReleaseWriter());
       // To modify logs_ both mutex_ and log_write_mutex_ must be held
@@ -1475,6 +1495,21 @@ void DBImpl::MarkLogsNotSynced(uint64_t up_to) {
     wal.getting_synced = false;
   }
   log_sync_cv_.SignalAll();
+}
+
+void DBImpl::RecordWALFinalizationError(const IOStatus& status) {
+  if (status.ok()) {
+    return;
+  }
+  ROCKS_LOG_ERROR(immutable_db_options_.info_log,
+                  "WAL finalization error: %s", status.ToString().c_str());
+  InstrumentedMutexLock lock(&mutex_);
+  if (wal_finalization_status_.ok()) {
+    wal_finalization_status_ = status;
+  }
+  if (!shutdown_initiated_) {
+    error_handler_.SetBGError(status, BackgroundErrorReason::kMemTable);
+  }
 }
 
 SequenceNumber DBImpl::GetLatestSequenceNumber() const {
@@ -1532,6 +1567,10 @@ void DBImpl::BackgroundCallPurge() {
     log::Writer* log_writer = *(logs_to_free_queue_.begin());
     logs_to_free_queue_.pop_front();
     mutex_.Unlock();
+    if (log_writer->UsesZeroRangePreallocation()) {
+      IOStatus status = log_writer->Close(immutable_db_options_.use_fsync);
+      RecordWALFinalizationError(status);
+    }
     delete log_writer;
     mutex_.Lock();
   }

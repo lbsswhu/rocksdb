@@ -389,8 +389,11 @@ Status DBImpl::GetLiveFilesStorageInfo(
       info.file_number = live_wal_files[i]->LogNumber();
       info.file_type = kWalFile;
       info.size = live_wal_files[i]->SizeFileBytes();
-      // Only last should need to be trimmed
-      info.trim_to_size = (i + 1 == wal_size);
+      // Every registered WAL has a complete-record prefix; a concurrent
+      // rotation must not cause a preallocated tail to be hard-linked/copied.
+      info.trim_to_size =
+          (i + 1 == wal_size) ||
+          wal_manager_.GetWalReadBoundary(info.file_number) != nullptr;
       if (opts.include_checksum_info) {
         info.file_checksum_func_name = kUnknownFileChecksumFuncName;
         info.file_checksum = kUnknownFileChecksum;

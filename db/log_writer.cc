@@ -10,6 +10,7 @@
 #include "db/log_writer.h"
 
 #include <stdint.h>
+
 #include "file/writable_file_writer.h"
 #include "rocksdb/env.h"
 #include "util/coding.h"
@@ -19,12 +20,14 @@ namespace ROCKSDB_NAMESPACE {
 namespace log {
 
 Writer::Writer(std::unique_ptr<WritableFileWriter>&& dest, uint64_t log_number,
-               bool recycle_log_files, bool manual_flush)
+               bool recycle_log_files, bool manual_flush,
+               std::shared_ptr<WalReadBoundary> read_boundary)
     : dest_(std::move(dest)),
       block_offset_(0),
       log_number_(log_number),
       recycle_log_files_(recycle_log_files),
-      manual_flush_(manual_flush) {
+      manual_flush_(manual_flush),
+      read_boundary_(std::move(read_boundary)) {
   for (int i = 0; i <= kMaxRecordType; i++) {
     char t = static_cast<char>(i);
     type_crc_[i] = crc32c::Value(&t, 1);
@@ -37,12 +40,59 @@ Writer::~Writer() {
   }
 }
 
-IOStatus Writer::WriteBuffer() { return dest_->Flush(); }
+IOStatus Writer::WriteBuffer() {
+  IOStatus s = dest_->Flush();
+  if (!s.ok()) {
+    write_error_ = true;
+  } else if (!write_error_) {
+    readable_end_.store(pending_complete_end_, std::memory_order_release);
+    if (read_boundary_) {
+      read_boundary_->readable_end.store(pending_complete_end_,
+                                         std::memory_order_release);
+    }
+  }
+  return s;
+}
 
-IOStatus Writer::Close() {
+bool Writer::UsesZeroRangePreallocation() const {
+  return dest_ && dest_->UsesZeroRangePreallocation();
+}
+
+bool Writer::IsSealed() const { return dest_ && dest_->IsSealed(); }
+
+IOStatus Writer::Seal() {
+  IOStatus s = WriteBuffer();
+  if (s.ok()) {
+    s = dest_->Seal();
+  }
+  if (s.ok() && read_boundary_) {
+    read_boundary_->sealed.store(true, std::memory_order_release);
+  }
+  return s;
+}
+
+IOStatus Writer::Close(bool use_fsync) {
   IOStatus s;
   if (dest_) {
-    s = dest_->Close();
+    s = WriteBuffer();
+    if (UsesZeroRangePreallocation()) {
+      if (s.ok()) {
+        s = Seal();
+      }
+      IOStatus close_status = dest_->FinishAndClose(use_fsync);
+      if (s.ok()) {
+        s = close_status;
+      } else {
+        close_status.PermitUncheckedError();
+      }
+    } else {
+      IOStatus close_status = dest_->Close();
+      if (s.ok()) {
+        s = close_status;
+      } else {
+        close_status.PermitUncheckedError();
+      }
+    }
     dest_.reset();
   }
   return s;
@@ -104,9 +154,13 @@ IOStatus Writer::AddRecord(const Slice& slice) {
   } while (s.ok() && left > 0);
 
   if (s.ok()) {
+    pending_complete_end_ = dest_->GetFileSize();
     if (!manual_flush_) {
-      s = dest_->Flush();
+      s = WriteBuffer();
     }
+  }
+  if (!s.ok()) {
+    write_error_ = true;
   }
 
   return s;

@@ -55,6 +55,7 @@ struct ImmutableDBOptions {
   bool use_direct_reads;
   bool use_direct_io_for_flush_and_compaction;
   bool allow_fallocate;
+  bool enable_zero_range_preallocation;
   bool is_fd_close_on_exec;
   bool advise_random_on_open;
   double experimental_mempurge_threshold;

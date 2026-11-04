@@ -797,6 +797,15 @@ struct DBOptions {
   // https://github.com/btrfs/btrfs-dev-docs/blob/471c5699336e043114d4bca02adcd57d9dab9c44/data-extent-reference-counts.md
   bool allow_fallocate = true;
 
+  // On supporting local POSIX file systems, preallocate new WAL/SST tails with
+  // ZERO_RANGE and truncate to the logical size when sealing the file.
+  // Respects allow_fallocate; mmap writes, unsupported/custom file systems and
+  // WAL recycling retain legacy allocation. Immutable after DB::Open.
+  // Cross-process tailing of active WALs (including Secondary) requires this
+  // option to be false in the primary. Close normally before downgrading to
+  // older RocksDB versions, which cannot recover untrimmed zero-range WALs.
+  bool enable_zero_range_preallocation = true;
+
   // Disable child process inherit open files. Default: true
   bool is_fd_close_on_exec = true;
 

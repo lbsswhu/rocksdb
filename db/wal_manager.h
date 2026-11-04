@@ -11,13 +11,14 @@
 #include <atomic>
 #include <deque>
 #include <limits>
+#include <memory>
 #include <set>
+#include <string>
 #include <utility>
 #include <vector>
-#include <string>
-#include <memory>
 
 #include "db/version_set.h"
+#include "db/wal_read_boundary.h"
 #include "file/file_util.h"
 #include "options/db_options.h"
 #include "port/port.h"
@@ -48,6 +49,17 @@ class WalManager {
         wal_dir_(db_options_.GetWalDir()),
         wal_in_db_path_(db_options_.IsWalDirSameAsDBPath()),
         io_tracer_(io_tracer) {}
+
+  void RegisterWalReadBoundary(
+      uint64_t number, const std::shared_ptr<WalReadBoundary>& boundary) {
+    wal_read_boundaries_->Register(number, boundary);
+  }
+  std::shared_ptr<WalReadBoundary> GetWalReadBoundary(uint64_t number) const {
+    return wal_read_boundaries_->Get(number);
+  }
+  void UnregisterWalReadBoundary(uint64_t number) {
+    wal_read_boundaries_->Unregister(number);
+  }
 
   Status GetSortedWalFiles(VectorLogPtr& files);
 
@@ -96,6 +108,9 @@ class WalManager {
   const FileOptions file_options_;
   Env* env_;
   const FileSystemPtr fs_;
+
+  std::shared_ptr<WalReadBoundaryRegistry> wal_read_boundaries_ =
+      std::make_shared<WalReadBoundaryRegistry>();
 
   // ------- WalManager state -------
   // cache for ReadFirstRecord() calls

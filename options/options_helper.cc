@@ -112,6 +112,8 @@ DBOptions BuildDBOptions(const ImmutableDBOptions& immutable_db_options,
   options.use_direct_io_for_flush_and_compaction =
       immutable_db_options.use_direct_io_for_flush_and_compaction;
   options.allow_fallocate = immutable_db_options.allow_fallocate;
+  options.enable_zero_range_preallocation =
+      immutable_db_options.enable_zero_range_preallocation;
   options.is_fd_close_on_exec = immutable_db_options.is_fd_close_on_exec;
   options.stats_dump_period_sec = mutable_db_options.stats_dump_period_sec;
   options.stats_persist_period_sec =

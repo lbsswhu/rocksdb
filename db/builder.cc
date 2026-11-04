@@ -24,6 +24,7 @@
 #include "db/version_edit.h"
 #include "file/file_util.h"
 #include "file/filename.h"
+#include "file/preallocation.h"
 #include "file/read_write_util.h"
 #include "file/writable_file_writer.h"
 #include "monitoring/iostats_context_imp.h"
@@ -144,7 +145,18 @@ Status BuildTable(
       bool use_direct_writes = file_options.use_direct_writes;
       TEST_SYNC_POINT_CALLBACK("BuildTable:create_file", &use_direct_writes);
 #endif  // !NDEBUG
-      IOStatus io_s = NewWritableFile(fs, fname, &file, file_options);
+      FileOptions table_file_options = file_options;
+      ConfigureZeroRangePreallocation(
+          fs, db_options.enable_zero_range_preallocation, &table_file_options);
+      IOStatus io_s = NewWritableFile(fs, fname, &file, table_file_options);
+      if (io_s.ok()) {
+        io_s = SetSstPreallocationBlockSize(
+            file.get(), mutable_cf_options.write_buffer_size);
+        if (!io_s.ok()) {
+          file->Close(IOOptions(), nullptr).PermitUncheckedError();
+          fs->DeleteFile(fname, IOOptions(), nullptr).PermitUncheckedError();
+        }
+      }
       assert(s.ok());
       s = io_s;
       if (io_status->ok()) {
@@ -162,10 +174,11 @@ Status BuildTable(
       file->SetIOPriority(io_priority);
       file->SetWriteLifeTimeHint(write_hint);
       file_writer.reset(new WritableFileWriter(
-          std::move(file), fname, file_options, ioptions.clock, io_tracer,
+          std::move(file), fname, table_file_options, ioptions.clock, io_tracer,
           ioptions.stats, ioptions.listeners,
           ioptions.file_checksum_gen_factory.get(),
           tmp_set.Contains(FileType::kTableFile), false));
+      file_writer->SetPreallocationSource(PreallocationSource::kFlush);
 
       builder = NewTableBuilder(tboptions, file_writer.get());
     }
@@ -289,12 +302,9 @@ Status BuildTable(
     TEST_SYNC_POINT("BuildTable:BeforeSyncTable");
     if (s.ok() && !empty) {
       StopWatch sw(ioptions.clock, ioptions.stats, TABLE_SYNC_MICROS);
-      *io_status = file_writer->Sync(ioptions.use_fsync);
+      *io_status = file_writer->FinishAndClose(ioptions.use_fsync);
     }
     TEST_SYNC_POINT("BuildTable:BeforeCloseTableFile");
-    if (s.ok() && io_status->ok() && !empty) {
-      *io_status = file_writer->Close();
-    }
     if (s.ok() && io_status->ok() && !empty) {
       // Add the checksum information to file metadata.
       meta->file_checksum = file_writer->GetFileChecksum();

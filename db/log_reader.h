@@ -48,9 +48,11 @@ class Reader {
   // live while this Reader is in use.
   //
   // If "checksum" is true, verify checksums if available.
+  // WAL readers set wal_zero_tail to validate preallocated zero tails and
+  // retain the last complete record end. Leave false for MANIFEST readers.
   Reader(std::shared_ptr<Logger> info_log,
          std::unique_ptr<SequentialFileReader>&& file, Reporter* reporter,
-         bool checksum, uint64_t log_num);
+         bool checksum, uint64_t log_num, bool wal_zero_tail = false);
   // No copying allowed
   Reader(const Reader&) = delete;
   void operator=(const Reader&) = delete;
@@ -73,7 +75,8 @@ class Reader {
 
   // Returns the first physical offset after the last record returned by
   // ReadRecord, or zero before first call to ReadRecord. This can also be
-  // thought of as the "current" position in processing the file bytes.
+  // thought of as the "current" position in processing the file bytes for
+  // legacy non-WAL readers. WAL zero-tail scans never advance this value.
   uint64_t LastRecordEnd();
 
   // returns true if the reader has encountered an eof condition.
@@ -119,6 +122,9 @@ class Reader {
 
   // Offset of the last record returned by ReadRecord.
   uint64_t last_record_offset_;
+  // Complete valid record end, independent of physical read-ahead / zero tails.
+  uint64_t last_record_end_;
+  const bool wal_zero_tail_;
   // Offset of the first location past the end of buffer_.
   uint64_t end_of_buffer_offset_;
 

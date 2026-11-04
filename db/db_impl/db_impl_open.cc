@@ -7,6 +7,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 #include <cinttypes>
+#include <limits>
 
 #include "db/builder.h"
 #include "db/db_impl/db_impl.h"
@@ -927,7 +928,8 @@ Status DBImpl::RecoverLogFiles(const std::vector<uint64_t>& wal_numbers,
     // to be skipped instead of propagating bad information (like overly
     // large sequence numbers).
     log::Reader reader(immutable_db_options_.info_log, std::move(file_reader),
-                       &reporter, true /*checksum*/, wal_number);
+                       &reporter, true /*checksum*/, wal_number,
+                       true /* wal_zero_tail */);
 
     // Determine if we should tolerate incomplete records at the tail end of the
     // Read all the records and add to a memtable
@@ -1540,6 +1542,17 @@ IOStatus DBImpl::CreateWAL(uint64_t log_file_num, uint64_t recycle_log_number,
       BuildDBOptions(immutable_db_options_, mutable_db_options_);
   FileOptions opt_file_options =
       fs_->OptimizeForLogWrite(file_options_, db_options);
+  // Recycling can create a new file as well as reuse one. Keep the entire
+  // recycling configuration on its original allocation protocol.
+  opt_file_options.preallocation_mode = PreallocationMode::kLegacy;
+  const bool zero_range =
+      immutable_db_options_.enable_zero_range_preallocation &&
+      immutable_db_options_.recycle_log_file_num == 0 &&
+      opt_file_options.allow_fallocate && !opt_file_options.use_mmap_writes &&
+      fs_->SupportsZeroRangePreallocation();
+  if (zero_range) {
+    opt_file_options.preallocation_mode = PreallocationMode::kZeroRange;
+  }
   std::string wal_dir = immutable_db_options_.GetWalDir();
   std::string log_fname = LogFileName(wal_dir, log_file_num);
 
@@ -1557,6 +1570,21 @@ IOStatus DBImpl::CreateWAL(uint64_t log_file_num, uint64_t recycle_log_number,
   }
 
   if (io_s.ok()) {
+    if (zero_range) {
+      const size_t alignment = lfile->GetRequiredBufferAlignment();
+      const uint64_t max_offset = std::min<uint64_t>(
+          std::numeric_limits<size_t>::max(),
+          static_cast<uint64_t>(std::numeric_limits<int64_t>::max()));
+      if (preallocate_block_size == 0 || alignment == 0 ||
+          alignment - 1 > max_offset ||
+          preallocate_block_size > max_offset - (alignment - 1)) {
+        lfile->Close(IOOptions(), nullptr).PermitUncheckedError();
+        fs_->DeleteFile(log_fname, IOOptions(), nullptr).PermitUncheckedError();
+        return IOStatus::InvalidArgument("Invalid WAL preallocation size");
+      }
+      preallocate_block_size =
+          ((preallocate_block_size + alignment - 1) / alignment) * alignment;
+    }
     lfile->SetWriteLifeTimeHint(CalculateWALWriteHint());
     lfile->SetPreallocationBlockSize(preallocate_block_size);
 
@@ -1564,12 +1592,18 @@ IOStatus DBImpl::CreateWAL(uint64_t log_file_num, uint64_t recycle_log_number,
     FileTypeSet tmp_set = immutable_db_options_.checksum_handoff_file_types;
     std::unique_ptr<WritableFileWriter> file_writer(new WritableFileWriter(
         std::move(lfile), log_fname, opt_file_options,
-        immutable_db_options_.clock, io_tracer_, nullptr /* stats */, listeners,
+        immutable_db_options_.clock, io_tracer_, stats_, listeners,
         nullptr, tmp_set.Contains(FileType::kWalFile),
         tmp_set.Contains(FileType::kWalFile)));
+    std::shared_ptr<WalReadBoundary> read_boundary;
+    if (file_writer->UsesZeroRangePreallocation()) {
+      read_boundary = std::make_shared<WalReadBoundary>();
+      wal_manager_.RegisterWalReadBoundary(log_file_num, read_boundary);
+    }
     *new_log = new log::Writer(std::move(file_writer), log_file_num,
                                immutable_db_options_.recycle_log_file_num > 0,
-                               immutable_db_options_.manual_wal_flush);
+                               immutable_db_options_.manual_wal_flush,
+                               std::move(read_boundary));
   }
   return io_s;
 }

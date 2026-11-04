@@ -76,6 +76,8 @@ enum class CpuPriority {
 };
 
 // Options while opening a file to read/write
+enum class PreallocationMode { kLegacy, kZeroRange };
+
 struct EnvOptions {
   // Construct with default Options
   EnvOptions();
@@ -97,6 +99,9 @@ struct EnvOptions {
 
   // If false, fallocate() calls are bypassed
   bool allow_fallocate = true;
+
+  // Explicitly selected by audited WAL/SST creation paths only.
+  PreallocationMode preallocation_mode = PreallocationMode::kLegacy;
 
   // If true, set the FD_CLOEXEC on open fd.
   bool set_fd_cloexec = true;

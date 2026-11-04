@@ -41,6 +41,7 @@ Status WalManager::DeleteFile(const std::string& fname, uint64_t number) {
   if (s.ok()) {
     MutexLock l(&read_first_record_cache_mutex_);
     read_first_record_cache_.erase(number);
+    UnregisterWalReadBoundary(number);
   }
   return s;
 }
@@ -121,7 +122,8 @@ Status WalManager::GetUpdatesSince(
   }
   iter->reset(new TransactionLogIteratorImpl(
       wal_dir_, &db_options_, read_options, file_options_, seq,
-      std::move(wal_files), version_set, seq_per_batch_, io_tracer_));
+      std::move(wal_files), version_set, seq_per_batch_, io_tracer_,
+      wal_read_boundaries_));
   return (*iter)->status();
 }
 
@@ -275,6 +277,7 @@ void WalManager::ArchiveWALFile(const std::string& fname, uint64_t number) {
   // The sync point below is used in (DBTest,TransactionLogIteratorRace)
   TEST_SYNC_POINT("WalManager::PurgeObsoleteFiles:1");
   Status s = env_->RenameFile(fname, archived_log_name);
+  if (s.ok()) UnregisterWalReadBoundary(number);
   // The sync point below is used in (DBTest,TransactionLogIteratorRace)
   TEST_SYNC_POINT("WalManager::PurgeObsoleteFiles:2");
   ROCKS_LOG_INFO(db_options_.info_log, "Move log file %s to %s -- %s\n",
@@ -329,6 +332,10 @@ Status WalManager::GetSortedWalsOfType(const std::string& path,
         return s;
       }
 
+      auto boundary = GetWalReadBoundary(number);
+      if (boundary) {
+        size_bytes = boundary->readable_end.load(std::memory_order_acquire);
+      }
       log_files.push_back(std::unique_ptr<LogFile>(
           new LogFileImpl(number, log_type, sequence, size_bytes)));
     }
@@ -433,6 +440,10 @@ Status WalManager::GetLiveWalFile(uint64_t number,
     return s;
   }
 
+  auto boundary = GetWalReadBoundary(number);
+  if (boundary) {
+    size_bytes = boundary->readable_end.load(std::memory_order_acquire);
+  }
   log_file->reset(new LogFileImpl(number, kAliveLogFile,
                                   0,  // SequenceNumber
                                   size_bytes));
@@ -463,16 +474,19 @@ Status WalManager::ReadFirstLine(const std::string& fname,
     }
   };
 
+  auto boundary = GetWalReadBoundary(number);
+  FileOptions read_options(fs_->OptimizeForLogRead(file_options_));
+  read_options.disable_stdio_buffering = boundary != nullptr;
   std::unique_ptr<FSSequentialFile> file;
-  Status status = fs_->NewSequentialFile(fname,
-                                         fs_->OptimizeForLogRead(file_options_),
-                                         &file, nullptr);
-  std::unique_ptr<SequentialFileReader> file_reader(
-      new SequentialFileReader(std::move(file), fname, io_tracer_));
-
+  Status status = fs_->NewSequentialFile(fname, read_options, &file, nullptr);
   if (!status.ok()) {
     return status;
   }
+  if (boundary) {
+    file.reset(new BoundedWalSequentialFile(std::move(file), boundary));
+  }
+  std::unique_ptr<SequentialFileReader> file_reader(
+      new SequentialFileReader(std::move(file), fname, io_tracer_));
 
   LogReporter reporter;
   reporter.env = env_;
@@ -481,7 +495,7 @@ Status WalManager::ReadFirstLine(const std::string& fname,
   reporter.status = &status;
   reporter.ignore_error = !db_options_.paranoid_checks;
   log::Reader reader(db_options_.info_log, std::move(file_reader), &reporter,
-                     true /*checksum*/, number);
+                     true /*checksum*/, number, true /* WAL zero tail */);
   std::string scratch;
   Slice record;
 

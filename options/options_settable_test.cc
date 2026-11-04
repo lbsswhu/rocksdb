@@ -308,6 +308,7 @@ TEST_F(OptionsSettableTest, DBOptionsAllFieldsSettable) {
                              "persist_stats_to_disk=true;"
                              "stats_history_buffer_size=14159;"
                              "allow_fallocate=true;"
+                             "enable_zero_range_preallocation=true;"
                              "allow_mmap_reads=false;"
                              "use_direct_reads=false;"
                              "use_direct_io_for_flush_and_compaction=false;"

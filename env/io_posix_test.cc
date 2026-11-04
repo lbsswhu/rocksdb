@@ -6,9 +6,130 @@
 #include "test_util/testharness.h"
 
 #ifdef ROCKSDB_LIB_IO_POSIX
+#include <fcntl.h>
+#include <unistd.h>
+
 #include "env/io_posix.h"
+#include "test_util/sync_point.h"
 
 namespace ROCKSDB_NAMESPACE {
+
+TEST(PosixSequentialBufferingTest, FailureClosesCandidate) {
+  char path[] = "/tmp/rocksdb-buffering-XXXXXX";
+  int fd = mkstemp(path);
+  ASSERT_GE(fd, 0);
+  ASSERT_EQ(0, close(fd));
+  auto fs = Env::Default()->GetFileSystem();
+  FileOptions options;
+  options.disable_stdio_buffering = true;
+  int candidate_fd = -1;
+  SyncPoint::GetInstance()->SetCallBack(
+      "NewSequentialFile:Setvbuf", [&](void* arg) {
+        auto* result = static_cast<std::pair<int, int>*>(arg);
+        result->first = -1;
+        candidate_fd = result->second;
+        errno = 0;  // setvbuf does not promise to populate errno.
+      });
+  SyncPoint::GetInstance()->EnableProcessing();
+  std::unique_ptr<FSSequentialFile> file;
+  IOStatus status = fs->NewSequentialFile(path, options, &file, nullptr);
+  SyncPoint::GetInstance()->DisableProcessing();
+  SyncPoint::GetInstance()->ClearAllCallBacks();
+  EXPECT_TRUE(status.IsIOError());
+  EXPECT_EQ(nullptr, file.get());
+  ASSERT_GE(candidate_fd, 0);
+  EXPECT_EQ(-1, fcntl(candidate_fd, F_GETFD));
+  EXPECT_EQ(EBADF, errno);
+  ASSERT_EQ(0, unlink(path));
+}
+
+#if defined(ROCKSDB_FALLOCATE_PRESENT) && defined(FALLOC_FL_ZERO_RANGE)
+class ZeroRangeAllocationTest : public testing::Test {
+ protected:
+  void TearDown() override {
+    SyncPoint::GetInstance()->DisableProcessing();
+    SyncPoint::GetInstance()->ClearAllCallBacks();
+  }
+};
+
+TEST_F(ZeroRangeAllocationTest, FallbackAndErrors) {
+  for (int injected : {EOPNOTSUPP, ENOSYS, EINVAL, ENOSPC, EIO}) {
+    char path[] = "/tmp/rocksdb-zero-range-XXXXXX";
+    int fd = mkstemp(path);
+    ASSERT_GE(fd, 0);
+    EnvOptions options;
+    options.use_mmap_writes = false;
+    options.preallocation_mode = PreallocationMode::kZeroRange;
+    PosixWritableFile file(path, fd, 4096, options);
+    int attempts = 0;
+    SyncPoint::GetInstance()->SetCallBack(
+        "PosixWritableFile::Allocate:ZeroRangeError", [&](void* arg) {
+          ++attempts;
+          *static_cast<int*>(arg) = injected;
+        });
+    SyncPoint::GetInstance()->EnableProcessing();
+    IOStatus status = file.Allocate(0, 4096, IOOptions(), nullptr);
+    if (injected == EOPNOTSUPP || injected == ENOSYS) {
+      ASSERT_OK(status);
+      EXPECT_EQ(PreallocationMode::kLegacy, file.GetPreallocationMode());
+      ASSERT_OK(file.Allocate(4096, 4096, IOOptions(), nullptr));
+      EXPECT_EQ(1, attempts);
+    } else {
+      EXPECT_FALSE(status.ok());
+      EXPECT_EQ(PreallocationMode::kZeroRange, file.GetPreallocationMode());
+    }
+    ASSERT_OK(file.Close(IOOptions(), nullptr));
+    struct stat stats;
+    ASSERT_EQ(0, stat(path, &stats));
+    EXPECT_EQ(0, stats.st_size);
+    ASSERT_EQ(0, unlink(path));
+    SyncPoint::GetInstance()->DisableProcessing();
+    SyncPoint::GetInstance()->ClearAllCallBacks();
+  }
+}
+
+TEST_F(ZeroRangeAllocationTest, InterruptedAllocationRetries) {
+  char path[] = "/tmp/rocksdb-zero-range-XXXXXX";
+  int fd = mkstemp(path);
+  ASSERT_GE(fd, 0);
+  EnvOptions options;
+  options.use_mmap_writes = false;
+  options.preallocation_mode = PreallocationMode::kZeroRange;
+  PosixWritableFile file(path, fd, 4096, options);
+  int attempts = 0;
+  SyncPoint::GetInstance()->SetCallBack(
+      "PosixWritableFile::Allocate:ZeroRangeError", [&](void* arg) {
+        *static_cast<int*>(arg) = attempts++ == 0 ? EINTR : ENOSYS;
+      });
+  SyncPoint::GetInstance()->EnableProcessing();
+  ASSERT_OK(file.Allocate(0, 4096, IOOptions(), nullptr));
+  EXPECT_EQ(2, attempts);
+  ASSERT_OK(file.Close(IOOptions(), nullptr));
+  ASSERT_EQ(0, unlink(path));
+}
+
+TEST_F(ZeroRangeAllocationTest, TruncateFailureClosesDescriptor) {
+  char path[] = "/tmp/rocksdb-zero-range-XXXXXX";
+  int fd = mkstemp(path);
+  ASSERT_GE(fd, 0);
+  EnvOptions options;
+  options.use_mmap_writes = false;
+  options.preallocation_mode = PreallocationMode::kZeroRange;
+  PosixWritableFile file(path, fd, 4096, options);
+  SyncPoint::GetInstance()->SetCallBack(
+      "PosixWritableFile::Allocate:ZeroRangeError",
+      [](void* arg) { *static_cast<int*>(arg) = ENOSYS; });
+  SyncPoint::GetInstance()->EnableProcessing();
+  ASSERT_OK(file.Allocate(0, 4096, IOOptions(), nullptr));
+  SyncPoint::GetInstance()->SetCallBack(
+      "PosixWritableFile::Truncate:Error",
+      [](void* arg) { *static_cast<int*>(arg) = EIO; });
+  EXPECT_TRUE(file.Close(IOOptions(), nullptr).IsIOError());
+  EXPECT_EQ(-1, fcntl(fd, F_GETFD));
+  EXPECT_EQ(EBADF, errno);
+  ASSERT_EQ(0, unlink(path));
+}
+#endif
 
 #ifdef OS_LINUX
 class LogicalBlockSizeCacheTest : public testing::Test {};
