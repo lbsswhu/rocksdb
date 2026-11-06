@@ -9,11 +9,14 @@
 
 #include "rocksdb/db_bench_tool.h"
 
+#include <regex>
+
 #include "db/db_impl/db_impl.h"
 #include "options/options_parser.h"
 #include "rocksdb/utilities/options_util.h"
 #include "test_util/testharness.h"
 #include "test_util/testutil.h"
+#include "test_util/sync_point.h"
 #include "util/random.h"
 
 #ifdef GFLAGS
@@ -122,6 +125,41 @@ class DBBenchTest : public testing::Test {
 };
 
 namespace {}  // namespace
+
+TEST_F(DBBenchTest, AsyncAcknowledgmentTimingExcludesFinalDrain) {
+  GFLAGS_NAMESPACE::FlagSaver restore_flags;
+  ResetArgs();
+  AppendArgs({"./db_bench", "--benchmarks=fillrandom", "--options_file=",
+              "--use_existing_db=0", "--num=100", "--duration=0", "--threads=1",
+              "--compression_type=none", "--sync=0", "--enable_async_commit=1",
+              "--enable_pipelined_write=1", "--async_commit_memtable_threads=1",
+              "--allow_concurrent_memtable_write=0", "--histogram=0",
+              "--report_file_operations=0", "--db=" + db_path_});
+  bool delayed = false;
+  auto* sp = SyncPoint::GetInstance();
+  sp->SetCallBack("DBBench::RunBenchmark:BeforeAsyncDrain", [&](void*) {
+    delayed = true;
+    // A controlled gap between API completion and drain isolates the two
+    // reporting intervals; this does not infer thread ordering from a sleep.
+    Env::Default()->SleepForMicroseconds(250000);
+  });
+  sp->EnableProcessing();
+  testing::internal::CaptureStdout();
+  int result = db_bench_tool(argc(), argv());
+  std::string output = testing::internal::GetCapturedStdout();
+  sp->DisableProcessing();
+  sp->ClearAllCallBacks();
+  ASSERT_EQ(0, result);
+  ASSERT_TRUE(delayed);
+  std::smatch ack, complete;
+  ASSERT_TRUE(std::regex_search(output, ack, std::regex(
+      "fillrandom-wal-ack\\s*:\\s*[0-9.]+ micros/op ([0-9.]+) ops/sec")));
+  ASSERT_TRUE(std::regex_search(output, complete, std::regex(
+      "fillrandom\\s*:\\s*[0-9.]+ micros/op ([0-9.]+) ops/sec")));
+  const double ack_seconds = 100.0 / std::stod(ack[1]);
+  const double complete_seconds = 100.0 / std::stod(complete[1]);
+  ASSERT_GE(complete_seconds - ack_seconds, 0.2);
+}
 
 TEST_F(DBBenchTest, OptionsFile) {
   const std::string kOptionsFileName = test_path_ + "/OPTIONS_test";

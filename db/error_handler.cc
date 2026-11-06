@@ -275,6 +275,10 @@ const Status& ErrorHandler::SetBGError(const Status& bg_err,
   if (bg_err.ok()) {
     return bg_err;
   }
+  if (reason == BackgroundErrorReason::kMemTable ||
+      reason == BackgroundErrorReason::kWriteCallback) {
+    db_->FailAsyncCommit(bg_err);
+  }
 
   if (bg_error_stats_ != nullptr) {
     RecordTick(bg_error_stats_.get(), ERROR_HANDLER_BG_ERROR_COUNT);
@@ -385,6 +389,10 @@ const Status& ErrorHandler::SetBGError(const IOStatus& bg_io_err,
   if (bg_io_err.ok()) {
     return bg_io_err;
   }
+  if (reason == BackgroundErrorReason::kWriteCallback) {
+    db_->FailAsyncCommit(bg_io_err);
+  }
+
   ROCKS_LOG_WARN(db_options_.info_log, "Background IO error %s",
                  bg_io_err.ToString().c_str());
 

@@ -58,6 +58,7 @@
 #include "rocksdb/secondary_cache.h"
 #include "rocksdb/slice.h"
 #include "rocksdb/slice_transform.h"
+#include "test_util/sync_point.h"
 #include "rocksdb/stats_history.h"
 #include "rocksdb/utilities/object_registry.h"
 #include "rocksdb/utilities/optimistic_transaction_db.h"
@@ -1183,6 +1184,16 @@ DEFINE_uint64(delayed_write_rate, 8388608u,
               "Limited bytes allowed to DB when soft_rate_limit or "
               "level0_slowdown_writes_trigger triggers");
 
+DEFINE_bool(
+    enable_async_commit, false,
+    "Acknowledge async writes after WAL; pool + pipelining also releases leader");
+DEFINE_int32(async_commit_memtable_threads, 0,
+             "Dedicated async commit memtable workers (zero uses original leader)");
+DEFINE_uint64(max_async_commit_pending_groups, 4096,
+              "Maximum pending async commit groups with a worker pool");
+DEFINE_uint64(max_async_commit_pending_bytes, 67108864,
+              "Maximum retained async commit group bytes (nonzero)");
+
 DEFINE_bool(enable_pipelined_write, true,
             "Allow WAL and memtable writes to be pipelined");
 
@@ -2189,6 +2200,27 @@ class Stats {
   void AddMessage(Slice msg) {
     AppendWithSpace(&message_, msg);
   }
+
+  // A fresh accumulator may be constructed after the final drain. Its own
+  // construction time must not replace the writers' actual completion time.
+  void ResetTimingForMerge() {
+    assert(done_ == 0 && seconds_ == 0);
+    start_ = std::numeric_limits<uint64_t>::max();
+    finish_ = 0;
+  }
+
+  // Lightweight acknowledgment summary has no file-counter reset/flush side
+  // effects. Render it only after the completion timestamp has been captured.
+  void ReportAsyncAcknowledgments(const Slice& name) const {
+    const double elapsed = std::max(1e-6, (finish_ - start_) * 1e-6);
+    fprintf(stdout, "%s-wal-ack : %11.3f micros/op %0.0f ops/sec;\n",
+            name.ToString().c_str(), done_ ? seconds_ * 1e6 / done_ : 0,
+            done_ / elapsed);
+  }
+
+  // Drain extends completed throughput's wall time. Keep seconds_/histograms
+  // as API acknowledgment latency, which does not include background work.
+  void ExtendForAsyncDrain(uint64_t end) { finish_ = std::max(finish_, end); }
 
   void SetId(int id) { id_ = id; }
   void SetExcludeFromMerge() { exclude_from_merge_ = true; }
@@ -3763,10 +3795,65 @@ class Benchmark {
     }
     shared.mu.Unlock();
 
-    // Stats for some threads can be excluded.
+    // API completion no longer implies pool completion. Capture both times
+    // before rendering reports, and reset file-operation counters only once.
+    bool pool_mode = db_.db &&
+                     db_.db->GetDBOptions().async_commit_memtable_threads > 0;
+    for (auto& db : multi_dbs_)
+      pool_mode |= db.db && db.db->GetDBOptions().async_commit_memtable_threads > 0;
+    uint64_t drain_start = FLAGS_env->NowMicros();
+    TEST_SYNC_POINT("DBBench::RunBenchmark:BeforeAsyncDrain");
+    auto drain_async = [](DB* db) {
+      if (db == nullptr || !db->GetDBOptions().enable_async_commit) return;
+      Status status = static_cast<DBImpl*>(db->GetRootDB())->WaitForAsyncCommit();
+      if (!status.ok()) {
+        fprintf(stderr, "Async commit drain failed: %s\n", status.ToString().c_str());
+        exit(1);
+      }
+    };
+    drain_async(db_.db);
+    for (auto& db : multi_dbs_) drain_async(db.db);
+    const uint64_t drain_end = FLAGS_env->NowMicros();
+    auto check_async_completion = [](DB* db) {
+      if (db == nullptr || !db->GetDBOptions().enable_async_commit) return;
+      uint64_t groups = 0, bytes = 0, error = 0;
+      bool known =
+          db->GetIntProperty("rocksdb.async-commit-pending-groups", &groups) &&
+          db->GetIntProperty("rocksdb.async-commit-pending-bytes", &bytes) &&
+          db->GetIntProperty("rocksdb.async-commit-terminal-error", &error);
+      fprintf(stdout,
+              "Async commit completion: pending_groups=%" PRIu64
+              " pending_bytes=%" PRIu64 " terminal_error=%" PRIu64 "\n",
+              groups, bytes, error);
+      if (!known || groups != 0 || bytes != 0 || error != 0) {
+        fprintf(stderr, "Async commit did not complete successfully\n");
+        exit(1);
+      }
+      if (db->GetDBOptions().async_commit_memtable_threads > 0) {
+        for (const char* metric : {"submitted-groups", "drained-groups",
+                                  "lease-batches", "lease-ranges", "lease-bytes",
+                                  "single-copy-bytes", "queue-micros", "apply-micros",
+                                  "idle-polls", "sleep-calls", "wake-calls",
+                                  "submit-micros", "queue-cas-retries",
+                                  "retired-nodes", "idle-micros"}) {
+          uint64_t value = 0;
+          std::string key = std::string("rocksdb.async-commit-executor-") + metric;
+          if (db->GetIntProperty(key, &value))
+            fprintf(stdout, "Async executor %s: %" PRIu64 "\n", metric, value);
+        }
+      }
+    };
+    check_async_completion(db_.db);
+    for (auto& db : multi_dbs_) check_async_completion(db.db);
     Stats merge_stats;
-    for (int i = 0; i < n; i++) {
-      merge_stats.Merge(arg[i].thread->stats);
+    merge_stats.ResetTimingForMerge();
+    for (int i = 0; i < n; i++) merge_stats.Merge(arg[i].thread->stats);
+    if (pool_mode) {
+      merge_stats.ReportAsyncAcknowledgments(name);
+      merge_stats.ExtendForAsyncDrain(drain_end);
+      fprintf(stdout, "Async commit drain: %" PRIu64
+                      " us (main throughput includes drain; latency is WAL ack)\n",
+              drain_end - drain_start);
     }
     merge_stats.Report(name);
 
@@ -4262,6 +4349,11 @@ class Benchmark {
     options.enable_write_thread_adaptive_yield =
         FLAGS_enable_write_thread_adaptive_yield;
     options.enable_pipelined_write = FLAGS_enable_pipelined_write;
+    options.enable_async_commit = FLAGS_enable_async_commit;
+    options.async_commit_memtable_threads = FLAGS_async_commit_memtable_threads;
+    options.max_async_commit_pending_groups = FLAGS_max_async_commit_pending_groups;
+    options.max_async_commit_pending_bytes =
+        FLAGS_max_async_commit_pending_bytes;
     options.unordered_write = FLAGS_unordered_write;
     options.write_thread_max_yield_usec = FLAGS_write_thread_max_yield_usec;
     options.write_thread_slow_yield_usec = FLAGS_write_thread_slow_yield_usec;

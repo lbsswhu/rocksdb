@@ -110,6 +110,19 @@ Status DBImpl::WriteImpl(const WriteOptions& write_options,
     }
   }
 
+  if (immutable_db_options_.enable_async_commit) {
+    if (write_options.disableWAL || write_options.timestamp != nullptr ||
+        callback != nullptr || pre_release_callback != nullptr ||
+        disable_memtable || log_ref != 0 || batch_cnt != 0 || seq_per_batch_ ||
+        two_write_queues_ || !batch_per_txn_ ||
+        !my_batch->GetWalTerminationPoint().is_cleared() ||
+        WriteBatchInternal::IsLatestPersistentState(my_batch)) {
+      return Status::NotSupported(
+          "unsupported enable_async_commit write request");
+    }
+    return AsyncWriteImpl(write_options, my_batch, log_used, seq_used);
+  }
+
   if (two_write_queues_ && disable_memtable) {
     AssignOrder assign_order =
         seq_per_batch_ ? kDoAssignOrder : kDontAssignOrder;
@@ -916,9 +929,9 @@ Status DBImpl::PreprocessWrite(const WriteOptions& write_options,
                                WriteContext* write_context) {
   mutex_.AssertHeld();
   assert(write_context != nullptr && need_log_sync != nullptr);
-  Status status;
+  Status status = AsyncCommitStatus();
 
-  if (error_handler_.IsDBStopped()) {
+  if (status.ok() && error_handler_.IsDBStopped()) {
     status = error_handler_.GetBGError();
   }
 
@@ -929,7 +942,8 @@ Status DBImpl::PreprocessWrite(const WriteOptions& write_options,
   if (UNLIKELY(status.ok() && !single_column_family_mode_ &&
                total_log_size_ > GetMaxTotalWalSize())) {
     WaitForPendingWrites();
-    status = SwitchWAL(write_context);
+    status = AsyncCommitStatus();
+    if (status.ok()) status = SwitchWAL(write_context);
   }
 
   if (UNLIKELY(status.ok() && write_buffer_manager_->ShouldFlush())) {
@@ -939,17 +953,39 @@ Status DBImpl::PreprocessWrite(const WriteOptions& write_options,
     // be flushed. We may end up with flushing much more DBs than needed. It's
     // suboptimal but still correct.
     WaitForPendingWrites();
-    status = HandleWriteBufferManagerFlush(write_context);
+    status = AsyncCommitStatus();
+    if (status.ok()) status = HandleWriteBufferManagerFlush(write_context);
   }
 
   if (UNLIKELY(status.ok() && !trim_history_scheduler_.Empty())) {
-    status = TrimMemtableHistory(write_context);
+    if (immutable_db_options_.enable_async_commit) {
+      WaitForPendingWrites();
+      status = AsyncCommitStatus();
+    }
+    if (status.ok()) status = TrimMemtableHistory(write_context);
   }
 
   if (UNLIKELY(status.ok() && !flush_scheduler_.Empty())) {
     WaitForPendingWrites();
-    status = ScheduleFlushes(write_context);
+    status = AsyncCommitStatus();
+    if (status.ok()) status = ScheduleFlushes(write_context);
   }
+
+  // A pool worker never enters the WAL queue. Before a producer waits for
+  // flush-driven capacity, collect all previous worker accounting/scheduler
+  // requests and schedule the work that can release the stall.
+  auto prepare_pool_stall = [&]() -> Status {
+    if (!async_commit_executor_) return Status::OK();
+    WaitForPendingWrites();
+    Status s = AsyncCommitStatus();
+    if (s.ok() && write_buffer_manager_->ShouldFlush())
+      s = HandleWriteBufferManagerFlush(write_context);
+    if (s.ok() && !trim_history_scheduler_.Empty())
+      s = TrimMemtableHistory(write_context);
+    if (s.ok() && !flush_scheduler_.Empty())
+      s = ScheduleFlushes(write_context);
+    return s;
+  };
 
   PERF_TIMER_STOP(write_scheduling_flushes_compactions_time);
   PERF_TIMER_GUARD(write_pre_and_post_process_time);
@@ -962,7 +998,8 @@ Status DBImpl::PreprocessWrite(const WriteOptions& write_options,
     // for previous one. It might create a fairness issue that expiration
     // might happen for smaller writes but larger writes can go through.
     // Can optimize it if it is an issue.
-    status = DelayWrite(last_batch_group_size_, write_options);
+    status = prepare_pool_stall();
+    if (status.ok()) status = DelayWrite(last_batch_group_size_, write_options);
     PERF_TIMER_START(write_pre_and_post_process_time);
   }
 
@@ -973,10 +1010,13 @@ Status DBImpl::PreprocessWrite(const WriteOptions& write_options,
   // exceeded at this point so no new write (including current one) will go
   // through until memory usage is decreased.
   if (UNLIKELY(status.ok() && write_buffer_manager_->ShouldStall())) {
-    if (write_options.no_slowdown) {
-      status = Status::Incomplete("Write stall");
-    } else {
-      WriteBufferManagerStallWrites();
+    status = prepare_pool_stall();
+    if (status.ok() && write_buffer_manager_->ShouldStall()) {
+      if (write_options.no_slowdown) {
+        status = Status::Incomplete("Write stall");
+      } else {
+        WriteBufferManagerStallWrites();
+      }
     }
   }
 
@@ -1105,8 +1145,24 @@ IOStatus DBImpl::WriteToWAL(const WriteThread::WriteGroup& write_group,
 
   WriteBatchInternal::SetSequence(merged_batch, sequence);
 
+  io_s = WritePreparedBatchToWAL(*merged_batch, log_writer, log_used,
+                                 need_log_sync, need_log_dir_sync,
+                                 write_with_wal, to_be_cached_state);
+  if (merged_batch == &tmp_batch_) {
+    tmp_batch_.Clear();
+  }
+  return io_s;
+}
+
+IOStatus DBImpl::WritePreparedBatchToWAL(const WriteBatch& batch,
+                                         log::Writer* log_writer,
+                                         uint64_t* log_used, bool need_log_sync,
+                                         bool need_log_dir_sync,
+                                         size_t original_writer_count,
+                                         WriteBatch* to_be_cached_state) {
+  IOStatus io_s;
   uint64_t log_size;
-  io_s = WriteToWAL(*merged_batch, log_writer, log_used, &log_size);
+  io_s = WriteToWAL(batch, log_writer, log_used, &log_size);
   if (to_be_cached_state) {
     cached_recoverable_state_ = *to_be_cached_state;
     cached_recoverable_state_empty_ = false;
@@ -1152,9 +1208,6 @@ IOStatus DBImpl::WriteToWAL(const WriteThread::WriteGroup& write_group,
     }
   }
 
-  if (merged_batch == &tmp_batch_) {
-    tmp_batch_.Clear();
-  }
   if (io_s.ok()) {
     auto stats = default_cf_internal_stats_;
     if (need_log_sync) {
@@ -1163,8 +1216,9 @@ IOStatus DBImpl::WriteToWAL(const WriteThread::WriteGroup& write_group,
     }
     stats->AddDBStats(InternalStats::kIntStatsWalFileBytes, log_size);
     RecordTick(stats_, WAL_FILE_BYTES, log_size);
-    stats->AddDBStats(InternalStats::kIntStatsWriteWithWal, write_with_wal);
-    RecordTick(stats_, WRITE_WITH_WAL, write_with_wal);
+    stats->AddDBStats(InternalStats::kIntStatsWriteWithWal,
+                      original_writer_count);
+    RecordTick(stats_, WRITE_WITH_WAL, original_writer_count);
   }
   return io_s;
 }
@@ -1755,6 +1809,8 @@ void DBImpl::NotifyOnMemTableSealed(ColumnFamilyData* /*cfd*/,
 // REQUIRES: this thread is currently at the front of the 2nd writer queue if
 // two_write_queues_ is true (This is to simplify the reasoning.)
 Status DBImpl::SwitchMemtable(ColumnFamilyData* cfd, WriteContext* context) {
+  Status async_status = AsyncCommitStatus(false);
+  if (!async_status.ok()) return async_status;
   mutex_.AssertHeld();
   log::Writer* new_log = nullptr;
   MemTable* new_mem = nullptr;

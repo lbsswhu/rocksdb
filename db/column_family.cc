@@ -1323,6 +1323,14 @@ void ColumnFamilyData::ResetThreadLocalSuperVersions() {
 
 Status ColumnFamilyData::ValidateOptions(
     const DBOptions& db_options, const ColumnFamilyOptions& cf_options) {
+  if (db_options.enable_async_commit &&
+      (cf_options.inplace_update_support ||
+       cf_options.max_successive_merges != 0 ||
+       cf_options.comparator->timestamp_size() != 0)) {
+    return Status::NotSupported(
+        "enable_async_commit does not support in-place updates, successive "
+        "merge reads or timestamps");
+  }
   Status s;
   s = CheckCompressionSupported(cf_options);
   if (s.ok() && db_options.allow_concurrent_memtable_write) {

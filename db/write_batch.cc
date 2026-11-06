@@ -1473,10 +1473,12 @@ class MemTableInserter : public WriteBatch::Handler {
   }
 
   void set_log_number_ref(uint64_t log) { log_number_ref_ = log; }
-  void set_prot_info(const WriteBatch::ProtectionInfo* prot_info) {
+  void set_prot_info(const WriteBatch::ProtectionInfo* prot_info,
+                     size_t first_record_index = 0) {
     prot_info_ = prot_info;
-    prot_info_idx_ = 0;
+    prot_info_idx_ = first_record_index;
   }
+  size_t protection_index() const { return prot_info_idx_; }
 
   SequenceNumber sequence() const { return sequence_; }
 
@@ -1698,7 +1700,10 @@ class MemTableInserter : public WriteBatch::Handler {
     ret_status =
         mem->Add(sequence_, delete_type, key, value, kv_prot_info,
                  concurrent_memtable_writes_, get_post_process_info(mem),
-                 hint_per_batch_ ? &GetHintMap()[mem] : nullptr);
+                 // A hint belongs to one MemTableRep. Range tombstones use
+                 // a different skiplist from point keys in the same MemTable.
+                 hint_per_batch_ && delete_type != kTypeRangeDeletion
+                     ? &GetHintMap()[mem] : nullptr);
     if (UNLIKELY(ret_status.IsTryAgain())) {
       assert(seq_per_batch_);
       const bool kBatchBoundary = true;
@@ -1873,6 +1878,10 @@ class MemTableInserter : public WriteBatch::Handler {
         // applying it to the DB, and return an error to the user.
         return Status::InvalidArgument("end key comes before start key");
       } else if (cmp == 0) {
+        // An empty range is still an ordinary record in the WAL header.
+        // Consume its sequence in both live insertion and recovery, regardless
+        // of the write mode used when reopening this WAL.
+        MaybeAdvanceSeq();
         // TODO(ajkr): refactor `SeekToColumnFamily()` so it returns a `Status`.
         ret_status.PermitUncheckedError();
         // It's an empty range. Don't bother applying it to the DB.
@@ -2346,6 +2355,117 @@ Status WriteBatchInternal::InsertInto(
     inserter.PostProcess();
   }
   return s;
+}
+
+Status WriteBatchInternal::ValidateAsyncCommitRange(const WriteBatch* batch,
+                                                    size_t begin, size_t end,
+                                                    size_t first_record_index,
+                                                    uint32_t record_count) {
+  const size_t size = batch->rep_.size();
+  if (size < kHeader || begin < kHeader || begin > end || end > size) {
+    return Status::Corruption("invalid async commit range bounds");
+  }
+  const size_t total = Count(batch);
+  if (first_record_index > total || record_count > total - first_record_index ||
+      (batch->prot_info_ && batch->prot_info_->entries_.size() != total)) {
+    return Status::Corruption("invalid async commit record/protection bounds");
+  }
+  Slice input(batch->rep_.data() + kHeader, end - kHeader);
+  size_t offset = kHeader;
+  size_t found = 0;
+  bool found_begin = false;
+  while (true) {
+    if (offset == begin) {
+      found_begin = true;
+      if (found != first_record_index) {
+        return Status::Corruption("async commit first record index mismatch");
+      }
+    }
+    if (input.empty()) break;
+    char tag = 0;
+    uint32_t cf = 0;
+    Slice key, value, blob, xid;
+    Status status =
+        ReadRecordFromWriteBatch(&input, &tag, &cf, &key, &value, &blob, &xid);
+    if (!status.ok()) return status;
+    switch (tag) {
+      case kTypeValue:
+      case kTypeColumnFamilyValue:
+      case kTypeDeletion:
+      case kTypeColumnFamilyDeletion:
+      case kTypeSingleDeletion:
+      case kTypeColumnFamilySingleDeletion:
+      case kTypeRangeDeletion:
+      case kTypeColumnFamilyRangeDeletion:
+      case kTypeMerge:
+      case kTypeColumnFamilyMerge:
+        ++found;
+        break;
+      case kTypeLogData:
+        break;
+      default:
+        return Status::NotSupported(
+            "async commit only supports ordinary write records");
+    }
+    offset = end - input.size();
+  }
+  if (!found_begin || found != first_record_index + record_count ||
+      (end == size && found != total)) {
+    return Status::Corruption("async commit range record count mismatch");
+  }
+  return Status::OK();
+}
+
+Status WriteBatchInternal::InsertIntoRange(
+    const WriteBatch* batch, size_t begin, size_t end,
+    size_t first_record_index, uint32_t record_count, SequenceNumber sequence,
+    ColumnFamilyMemTables* memtables, FlushScheduler* flush_scheduler,
+    TrimHistoryScheduler* trim_history_scheduler,
+    bool ignore_missing_column_families, DB* db, bool hint_per_batch,
+    bool concurrent_memtable_writes) {
+  Status status = ValidateAsyncCommitRange(batch, begin, end,
+                                           first_record_index, record_count);
+  if (!status.ok()) return status;
+  if (sequence > kMaxSequenceNumber ||
+      record_count > kMaxSequenceNumber - sequence + 1) {
+    return Status::Corruption("async commit sequence range overflow");
+  }
+  MemTableInserter inserter(
+      sequence, memtables, flush_scheduler, trim_history_scheduler,
+      ignore_missing_column_families, 0, db,
+      concurrent_memtable_writes, nullptr,
+      nullptr /* has_valid_writes */, false /* seq_per_batch */,
+      true /* batch_per_txn */, hint_per_batch);
+  inserter.set_prot_info(batch->prot_info_.get(), first_record_index);
+  status = Iterate(batch, &inserter, begin, end);
+  if (status.ok() &&
+      (inserter.sequence() != sequence + record_count ||
+       (batch->prot_info_ &&
+        inserter.protection_index() != first_record_index + record_count))) {
+    status = Status::Corruption("async commit range consumption mismatch");
+  }
+  // Count/flush-state changes for already inserted records must be committed
+  // even if a later record failed. Publication remains the caller's decision.
+  if (concurrent_memtable_writes) inserter.PostProcess();
+  return status;
+}
+
+void WriteBatchInternal::ReserveForAppend(WriteBatch* batch, size_t count) {
+  assert(Count(batch) == 0);
+  if (batch->prot_info_) {
+    batch->prot_info_->entries_.resize(count);
+    batch->prot_info_->entries_.resize(0);
+  }
+}
+
+size_t WriteBatchInternal::AllocatedBytes(const WriteBatch* batch) {
+  size_t bytes = sizeof(WriteBatch) + batch->rep_.capacity();
+  if (batch->prot_info_) {
+    bytes +=
+        sizeof(WriteBatch::ProtectionInfo) +
+        batch->prot_info_->entries_.capacity() * sizeof(ProtectionInfoKVOC64);
+  }
+  return bytes;
 }
 
 Status WriteBatchInternal::SetContents(WriteBatch* b, const Slice& contents) {

@@ -72,6 +72,13 @@ Status OptimisticTransactionDB::Open(
     const std::vector<ColumnFamilyDescriptor>& column_families,
     std::vector<ColumnFamilyHandle*>* handles,
     OptimisticTransactionDB** dbptr) {
+  if (db_options.enable_async_commit) {
+    *dbptr = nullptr;
+    handles->clear();
+    return Status::NotSupported(
+        "transactions do not support enable_async_commit");
+  }
+
   Status s;
   DB* db;
 

@@ -7,6 +7,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 #include "db/db_impl/db_impl.h"
+#include "db/async_commit_executor.h"
 
 #include <stdint.h>
 #ifdef OS_SOLARIS
@@ -277,12 +278,18 @@ DBImpl::DBImpl(const DBOptions& options, const std::string& dbname,
   // is called by client and this seqnum is advanced.
   preserve_deletes_seqnum_.store(0);
 
+  if (immutable_db_options_.enable_async_commit) {
+    async_commit_context_.reset(new ThreadLocalPtr(
+        [](void* ptr) { delete static_cast<AsyncCommitThreadContext*>(ptr); }));
+  }
   if (write_buffer_manager_) {
     wbm_stall_.reset(new WBMStallInterface());
   }
 }
 
 Status DBImpl::Resume() {
+  Status async_status = AsyncCommitStatus();
+  if (!async_status.ok()) return async_status;
   ROCKS_LOG_INFO(immutable_db_options_.info_log, "Resuming DB");
 
   InstrumentedMutexLock db_mutex(&mutex_);
@@ -514,6 +521,16 @@ void DBImpl::CancelAllBackgroundWork(bool wait) {
 }
 
 Status DBImpl::CloseHelper() {
+  // API callers are quiescent, but owned pool groups may still be running.
+  // Keep publication enabled until the last acknowledged group is drained.
+  Status async_close_status = StopAsyncCommitExecutor();
+  if (immutable_db_options_.enable_async_commit) {
+    {
+      std::lock_guard<std::mutex> lock(async_commit_mutex_);
+      async_commit_closing_ = true;
+    }
+    async_commit_cv_.notify_all();
+  }
   // Guarantee that there is no background error recovery in progress before
   // continuing with the shutdown
   mutex_.Lock();
@@ -537,7 +554,7 @@ Status DBImpl::CloseHelper() {
   env_->UnSchedule(this, Env::Priority::BOTTOM);
   env_->UnSchedule(this, Env::Priority::LOW);
   env_->UnSchedule(this, Env::Priority::HIGH);
-  Status ret = Status::OK();
+  Status ret = async_close_status;
 
   // Wait for background work to finish
   while (bg_bottom_compaction_scheduled_ || bg_compaction_scheduled_ ||
@@ -1085,7 +1102,11 @@ Status DBImpl::SetOptions(
   {
     auto db_options = GetDBOptions();
     InstrumentedMutexLock l(&mutex_);
-    s = cfd->SetOptions(db_options, options_map);
+    WriteThread::Writer barrier;
+    const bool pool = async_commit_executor_ != nullptr;
+    if (pool) write_thread_.EnterUnbatched(&barrier, &mutex_);
+    s = AsyncCommitStatus(false);
+    if (s.ok()) s = cfd->SetOptions(db_options, options_map);
     if (s.ok()) {
       new_options = *cfd->GetLatestMutableCFOptions();
       // Append new version to recompute compaction score.
@@ -1098,9 +1119,10 @@ Status DBImpl::SetOptions(
       InstallSuperVersionAndScheduleWork(cfd, &sv_context, new_options);
 
       persist_options_status = WriteOptionsFile(
-          false /*need_mutex_lock*/, true /*need_enter_write_thread*/);
+          false /*need_mutex_lock*/, !pool /*need_enter_write_thread*/);
       bg_cv_.SignalAll();
     }
+    if (pool) write_thread_.ExitUnbatched(&barrier);
   }
   sv_context.Clean();
 
@@ -1702,6 +1724,8 @@ Status DBImpl::Get(const ReadOptions& read_options,
 Status DBImpl::Get(const ReadOptions& read_options,
                    ColumnFamilyHandle* column_family, const Slice& key,
                    PinnableSlice* value, std::string* timestamp) {
+  Status ready = PrepareAsyncCommitRead(read_options);
+  if (!ready.ok()) return ready;
   GetImplOptions get_impl_options;
   get_impl_options.column_family = column_family;
   get_impl_options.value = value;
@@ -1934,6 +1958,12 @@ std::vector<Status> DBImpl::MultiGet(
     const std::vector<ColumnFamilyHandle*>& column_family,
     const std::vector<Slice>& keys, std::vector<std::string>* values,
     std::vector<std::string>* timestamps) {
+  Status ready = PrepareAsyncCommitRead(read_options);
+  if (!ready.ok()) {
+    values->resize(keys.size());
+    if (timestamps) timestamps->resize(keys.size());
+    return std::vector<Status>(keys.size(), ready);
+  }
   PERF_CPU_TIMER_GUARD(get_cpu_nanos, immutable_db_options_.clock);
   StopWatch sw(immutable_db_options_.clock, stats_, DB_MULTIGET);
   PERF_TIMER_GUARD(get_snapshot_time);
@@ -2255,6 +2285,11 @@ void DBImpl::MultiGet(const ReadOptions& read_options, const size_t num_keys,
                       ColumnFamilyHandle** column_families, const Slice* keys,
                       PinnableSlice* values, std::string* timestamps,
                       Status* statuses, const bool sorted_input) {
+  Status ready = PrepareAsyncCommitRead(read_options);
+  if (!ready.ok()) {
+    for (size_t i = 0; i < num_keys; ++i) statuses[i] = ready;
+    return;
+  }
   if (num_keys == 0) {
     return;
   }
@@ -2421,6 +2456,11 @@ void DBImpl::MultiGet(const ReadOptions& read_options,
                       const Slice* keys, PinnableSlice* values,
                       std::string* timestamps, Status* statuses,
                       const bool sorted_input) {
+  Status ready = PrepareAsyncCommitRead(read_options);
+  if (!ready.ok()) {
+    for (size_t i = 0; i < num_keys; ++i) statuses[i] = ready;
+    return;
+  }
   if (tracer_) {
     // TODO: This mutex should be removed later, to improve performance when
     // tracing is enabled.
@@ -2720,9 +2760,12 @@ Status DBImpl::CreateColumnFamilyImpl(const ColumnFamilyOptions& cf_options,
       write_thread_.EnterUnbatched(&w, &mutex_);
       // LogAndApply will both write the creation in MANIFEST and create
       // ColumnFamilyData object
-      s = versions_->LogAndApply(nullptr, MutableCFOptions(cf_options), &edit,
-                                 &mutex_, directories_.GetDbDir(), false,
-                                 &cf_options);
+      s = AsyncCommitStatus(false);
+      if (s.ok()) {
+        s = versions_->LogAndApply(nullptr, MutableCFOptions(cf_options), &edit,
+                                   &mutex_, directories_.GetDbDir(), false,
+                                   &cf_options);
+      }
       write_thread_.ExitUnbatched(&w);
     }
     if (s.ok()) {
@@ -2820,8 +2863,11 @@ Status DBImpl::DropColumnFamilyImpl(ColumnFamilyHandle* column_family) {
       // we drop column family from a single write thread
       WriteThread::Writer w;
       write_thread_.EnterUnbatched(&w, &mutex_);
-      s = versions_->LogAndApply(cfd, *cfd->GetLatestMutableCFOptions(), &edit,
-                                 &mutex_);
+      s = AsyncCommitStatus(false);
+      if (s.ok()) {
+        s = versions_->LogAndApply(cfd, *cfd->GetLatestMutableCFOptions(),
+                                   &edit, &mutex_);
+      }
       write_thread_.ExitUnbatched(&w);
     }
     if (s.ok()) {
@@ -2867,6 +2913,12 @@ bool DBImpl::KeyMayExist(const ReadOptions& read_options,
                          std::string* value, std::string* timestamp,
                          bool* value_found) {
   assert(value != nullptr);
+  Status ready = PrepareAsyncCommitRead(read_options);
+  if (!ready.ok()) {
+    if (value_found) *value_found = false;
+    value->clear();
+    return true;  // Cannot rule the key out on a visibility-wait failure.
+  }
   if (value_found != nullptr) {
     // falsify later if key-may-exist but can't fetch value
     *value_found = true;
@@ -2890,6 +2942,12 @@ bool DBImpl::KeyMayExist(const ReadOptions& read_options,
 
 Iterator* DBImpl::NewIterator(const ReadOptions& read_options,
                               ColumnFamilyHandle* column_family) {
+  if (immutable_db_options_.enable_async_commit && read_options.tailing) {
+    return NewErrorIterator(Status::NotSupported(
+        "async commit does not support tailing iterators"));
+  }
+  Status ready = PrepareAsyncCommitRead(read_options);
+  if (!ready.ok()) return NewErrorIterator(ready);
   if (read_options.managed) {
     return NewErrorIterator(
         Status::NotSupported("Managed iterator is not supported anymore."));
@@ -3027,6 +3085,13 @@ Status DBImpl::NewIterators(
     const ReadOptions& read_options,
     const std::vector<ColumnFamilyHandle*>& column_families,
     std::vector<Iterator*>* iterators) {
+  iterators->clear();
+  if (immutable_db_options_.enable_async_commit && read_options.tailing) {
+    return Status::NotSupported(
+        "async commit does not support tailing iterators");
+  }
+  Status ready = PrepareAsyncCommitRead(read_options);
+  if (!ready.ok()) return ready;
   if (read_options.managed) {
     return Status::NotSupported("Managed iterator is not supported anymore.");
   }
@@ -3073,10 +3138,24 @@ Status DBImpl::NewIterators(
   return Status::OK();
 }
 
-const Snapshot* DBImpl::GetSnapshot() { return GetSnapshotImpl(false); }
+const Snapshot* DBImpl::GetSnapshot() {
+  Status ready = PrepareAsyncCommitRead(ReadOptions());
+  if (!ready.ok()) {
+    ROCKS_LOG_ERROR(immutable_db_options_.info_log,
+                    "Async snapshot wait failed: %s", ready.ToString().c_str());
+    return nullptr;
+  }
+  return GetSnapshotImpl(false);
+}
 
 #ifndef ROCKSDB_LITE
 const Snapshot* DBImpl::GetSnapshotForWriteConflictBoundary() {
+  Status ready = PrepareAsyncCommitRead(ReadOptions());
+  if (!ready.ok()) {
+    ROCKS_LOG_ERROR(immutable_db_options_.info_log,
+                    "Async snapshot wait failed: %s", ready.ToString().c_str());
+    return nullptr;
+  }
   return GetSnapshotImpl(true);
 }
 #endif  // ROCKSDB_LITE
@@ -3327,6 +3406,21 @@ bool DBImpl::GetMapProperty(ColumnFamilyHandle* column_family,
 
 bool DBImpl::GetIntProperty(ColumnFamilyHandle* column_family,
                             const Slice& property, uint64_t* value) {
+  if (async_commit_executor_ &&
+      async_commit_executor_->GetIntProperty(property, value)) return true;
+  if (property == "rocksdb.async-commit-pending-bytes" ||
+      property == "rocksdb.async-commit-pending-groups" ||
+      property == "rocksdb.async-commit-terminal-error") {
+    std::lock_guard<std::mutex> lock(async_commit_mutex_);
+    if (property == "rocksdb.async-commit-pending-bytes") {
+      *value = async_commit_pending_bytes_;
+    } else if (property == "rocksdb.async-commit-pending-groups") {
+      *value = async_commit_pending_groups_;
+    } else {
+      *value = !async_commit_error_.ok();
+    }
+    return true;
+  }
   const DBPropertyInfo* property_info = GetPropertyInfo(property);
   if (property_info == nullptr || property_info->handle_int == nullptr) {
     return false;
@@ -4619,13 +4713,14 @@ Status DBImpl::IngestExternalFiles(
     // memtable flush.
     // So wait here to ensure there is no pending write to memtable.
     WaitForPendingWrites();
+    status = AsyncCommitStatus(false);
 
     num_running_ingest_file_ += static_cast<int>(num_cfs);
     TEST_SYNC_POINT("DBImpl::IngestExternalFile:AfterIncIngestFileCounter");
 
     bool at_least_one_cf_need_flush = false;
     std::vector<bool> need_flush(num_cfs, false);
-    for (size_t i = 0; i != num_cfs; ++i) {
+    for (size_t i = 0; status.ok() && i != num_cfs; ++i) {
       auto* cfd =
           static_cast<ColumnFamilyHandleImpl*>(args[i].column_family)->cfd();
       if (cfd->IsDropped()) {
@@ -4874,7 +4969,8 @@ Status DBImpl::CreateColumnFamilyWithImport(
 
       num_running_ingest_file_++;
       assert(!cfd->IsDropped());
-      status = import_job.Run();
+      status = AsyncCommitStatus(false);
+      if (status.ok()) status = import_job.Run();
 
       // Install job edit [Mutex will be unlocked here]
       if (status.ok()) {

@@ -1044,6 +1044,33 @@ struct DBOptions {
   // Default: false
   bool enable_pipelined_write = false;
 
+  // Experimental WAL acknowledgment mode. With zero memtable workers, the
+  // original leader applies each group; followers return after WAL success.
+  // With a worker pool, every caller may return after WAL regardless of
+  // enable_pipelined_write. The pool independently overlaps WAL/application.
+  // A successful return inherits the durability of WriteOptions::sync. New
+  // user read views on the same native thread and DB wait for that thread's
+  // successful writes to be published. Other threads do not inherit this
+  // dependency; explicit snapshots and existing iterators keep their history.
+  // Compatible with enable_pipelined_write. Immutable after opening the DB.
+  bool enable_async_commit = false;
+
+  // Bounds the additional group buffers/metadata retained by async commit.
+  // Without a pool a single-request payload is borrowed. With a pool all
+  // payloads are owned and charged, including single-request groups.
+  // An oversized group can proceed alone. Must be nonzero when async is on.
+  // Immutable. Default: 64 MiB.
+  size_t max_async_commit_pending_bytes = 64 * 1024 * 1024;
+
+  // Dedicated DB memtable workers. Zero preserves leader-applied async commit.
+  // Requires enable_async_commit; values > 1 also require
+  // allow_concurrent_memtable_write. Immutable. Default: 0.
+  int async_commit_memtable_threads = 0;
+
+  // Maximum reserved/queued/running/unretired groups in worker-pool mode,
+  // including empty and LogData-only groups. Must be positive. Immutable.
+  size_t max_async_commit_pending_groups = 4096;
+
   // Setting unordered_write to true trades higher write throughput with
   // relaxing the immutability guarantee of snapshots. This violates the
   // repeatability one expects from ::Get from a snapshot, as well as

@@ -70,6 +70,10 @@ class WriteThread {
     // A state indicating that the thread may be waiting using StateMutex()
     // and StateCondVar()
     STATE_LOCKED_WAITING = 32,
+
+    // Async follower: WAL succeeded and every external reference to this
+    // Writer and its caller-owned batch has been removed.
+    STATE_WAL_COMPLETED = 64,
   };
 
   struct Writer;
@@ -130,6 +134,10 @@ class WriteThread {
     SequenceNumber sequence;  // the sequence number to use for the first key
     Status status;
     Status callback_status;  // status returned by callback->Callback()
+    SequenceNumber async_end_sequence = 0;
+    bool async_has_sequence = false;
+    bool ignore_missing_column_families = false;
+    bool memtable_insert_hint_per_batch = false;
 
     std::aligned_storage<sizeof(std::mutex)>::type state_mutex_bytes;
     std::aligned_storage<sizeof(std::condition_variable)>::type state_cv_bytes;
@@ -175,7 +183,12 @@ class WriteThread {
           write_group(nullptr),
           sequence(kMaxSequenceNumber),
           link_older(nullptr),
-          link_newer(nullptr) {}
+          link_newer(nullptr) {
+      ignore_missing_column_families =
+          write_options.ignore_missing_column_families;
+      memtable_insert_hint_per_batch =
+          write_options.memtable_insert_hint_per_batch;
+    }
 
     ~Writer() {
       if (made_waitable) {
@@ -258,6 +271,11 @@ class WriteThread {
   };
 
   explicit WriteThread(const ImmutableDBOptions& db_options);
+  // Installed before Open returns. Called with WAL gate and without DB mutex.
+  void SetAsyncCommitDrain(std::function<void()> drain) {
+    async_commit_drain_ = std::move(drain);
+  }
+  void ExitAsyncWalGroup(WriteGroup& group, const Status& status);
 
   virtual ~WriteThread() = default;
 
@@ -298,6 +316,15 @@ class WriteThread {
 
   // Exit batch group on behalf of batch group leader.
   void ExitAsBatchGroupFollower(Writer* w);
+
+  // Repair both directions and the atomic tail before notifying followers.
+  // Shrinks group to its still-live leader; preserves WAL execution ownership.
+  void DetachAsyncFollowersKeepLeader(WriteGroup& group, const Status& status);
+
+  // Enqueue a separate, leader-owned representative BEFORE releasing the WAL
+  // boundary. Followers are detached and notified without waiting on memtable.
+  void TransferAsyncGroupToMemtable(WriteGroup& group, Writer* representative);
+  void WaitForAsyncMemtableWriter(Writer* representative);
 
   // Constructs a write batch group led by leader from newest_memtable_writers_
   // list. The leader should either write memtable for the whole group and
@@ -364,6 +391,7 @@ class WriteThread {
 
   // Enable pipelined write to WAL and memtable.
   const bool enable_pipelined_write_;
+  std::function<void()> async_commit_drain_;
 
   // The maximum limit of number of bytes that are written in a single batch
   // of WAL or memtable write. It is followed when the leader write size

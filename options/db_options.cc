@@ -315,6 +315,22 @@ static std::unordered_map<std::string, OptionTypeInfo>
          {offsetof(struct ImmutableDBOptions, fail_if_options_file_error),
           OptionType::kBoolean, OptionVerificationType::kNormal,
           OptionTypeFlags::kNone}},
+        {"enable_async_commit",
+         {offsetof(struct ImmutableDBOptions, enable_async_commit),
+          OptionType::kBoolean, OptionVerificationType::kNormal,
+          OptionTypeFlags::kNone}},
+        {"async_commit_memtable_threads",
+         {offsetof(struct ImmutableDBOptions, async_commit_memtable_threads),
+          OptionType::kInt, OptionVerificationType::kNormal,
+          OptionTypeFlags::kNone}},
+        {"max_async_commit_pending_groups",
+         {offsetof(struct ImmutableDBOptions, max_async_commit_pending_groups),
+          OptionType::kSizeT, OptionVerificationType::kNormal,
+          OptionTypeFlags::kNone}},
+        {"max_async_commit_pending_bytes",
+         {offsetof(struct ImmutableDBOptions, max_async_commit_pending_bytes),
+          OptionType::kSizeT, OptionVerificationType::kNormal,
+          OptionTypeFlags::kNone}},
         {"enable_pipelined_write",
          {offsetof(struct ImmutableDBOptions, enable_pipelined_write),
           OptionType::kBoolean, OptionVerificationType::kNormal,
@@ -697,6 +713,10 @@ ImmutableDBOptions::ImmutableDBOptions(const DBOptions& options)
       listeners(options.listeners),
       enable_thread_tracking(options.enable_thread_tracking),
       enable_pipelined_write(options.enable_pipelined_write),
+      enable_async_commit(options.enable_async_commit),
+      max_async_commit_pending_bytes(options.max_async_commit_pending_bytes),
+      async_commit_memtable_threads(options.async_commit_memtable_threads),
+      max_async_commit_pending_groups(options.max_async_commit_pending_groups),
       unordered_write(options.unordered_write),
       allow_concurrent_memtable_write(options.allow_concurrent_memtable_write),
       enable_write_thread_adaptive_yield(
@@ -847,6 +867,15 @@ void ImmutableDBOptions::Dump(Logger* log) const {
                    static_cast<int>(wal_recovery_mode));
   ROCKS_LOG_HEADER(log, "                 Options.enable_thread_tracking: %d",
                    enable_thread_tracking);
+  ROCKS_LOG_HEADER(log, "          Options.async_commit_memtable_threads: %d",
+                   async_commit_memtable_threads);
+  ROCKS_LOG_HEADER(log, "       Options.max_async_commit_pending_groups: %" ROCKSDB_PRIszt,
+                   max_async_commit_pending_groups);
+  ROCKS_LOG_HEADER(log, "                    Options.enable_async_commit: %d",
+                   enable_async_commit);
+  ROCKS_LOG_HEADER(
+      log, "         Options.max_async_commit_pending_bytes: %" ROCKSDB_PRIszt,
+      max_async_commit_pending_bytes);
   ROCKS_LOG_HEADER(log, "                 Options.enable_pipelined_write: %d",
                    enable_pipelined_write);
   ROCKS_LOG_HEADER(log, "                 Options.unordered_write: %d",

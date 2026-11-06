@@ -656,6 +656,8 @@ set(SOURCES
         db/db_impl/compacted_db_impl.cc
         db/db_impl/db_impl.cc
         db/db_impl/db_impl_write.cc
+        db/async_commit_executor.cc
+        db/db_impl/db_impl_async_commit.cc
         db/db_impl/db_impl_compaction_flush.cc
         db/db_impl/db_impl_files.cc
         db/db_impl/db_impl_open.cc
@@ -1187,6 +1189,8 @@ if(WITH_TESTS)
         db/db_wal_test.cc
         db/db_with_timestamp_compaction_test.cc
         db/db_write_test.cc
+        db/async_commit_executor_test.cc
+        db/async_commit_test.cc
         db/dbformat_test.cc
         db/deletefile_test.cc
         db/error_handler_fs_test.cc
@@ -1285,6 +1289,7 @@ if(WITH_TESTS)
         util/thread_list_test.cc
         util/thread_local_test.cc
         util/work_queue_test.cc
+        util/async_commit_queue_test.cc
         utilities/backupable/backupable_db_test.cc
         utilities/blob_db/blob_db_test.cc
         utilities/cassandra/cassandra_functional_test.cc
@@ -1387,6 +1392,17 @@ if(WITH_BENCHMARK_TOOLS)
     tools/db_bench_tool.cc)
   target_link_libraries(db_bench${ARTIFACT_SUFFIX}
     ${ROCKSDB_LIB} ${THIRDPARTY_LIBS})
+
+  if(WITH_TESTS AND WITH_GFLAGS)
+    add_executable(db_bench_tool_test
+      tools/db_bench_tool_test.cc
+      tools/db_bench_tool.cc
+      tools/simulated_hybrid_file_system.cc)
+    target_link_libraries(db_bench_tool_test
+      ${ROCKSDB_LIB} testharness ${THIRDPARTY_LIBS})
+    add_test(NAME db_bench_tool_test COMMAND db_bench_tool_test)
+    add_dependencies(check db_bench_tool_test)
+  endif()
 
   add_executable(cache_bench${ARTIFACT_SUFFIX}
     cache/cache_bench.cc

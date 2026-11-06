@@ -405,8 +405,10 @@ void WriteThread::JoinBatchGroup(Writer* w) {
      *      writes in parallel.
      */
     TEST_SYNC_POINT_CALLBACK("WriteThread::JoinBatchGroup:BeganWaiting", w);
-    AwaitState(w, STATE_GROUP_LEADER | STATE_MEMTABLE_WRITER_LEADER |
-                      STATE_PARALLEL_MEMTABLE_WRITER | STATE_COMPLETED,
+    AwaitState(w,
+               STATE_GROUP_LEADER | STATE_MEMTABLE_WRITER_LEADER |
+                   STATE_PARALLEL_MEMTABLE_WRITER | STATE_COMPLETED |
+                   STATE_WAL_COMPLETED,
                &jbg_ctx);
     TEST_SYNC_POINT_CALLBACK("WriteThread::JoinBatchGroup:DoneWaiting", w);
   }
@@ -758,6 +760,108 @@ void WriteThread::ExitAsBatchGroupLeader(WriteGroup& write_group,
   }
 }
 
+namespace {
+// The backward chain is private after the active queue has been repaired.
+// Capture the predecessor before notification; the notified stack can vanish.
+void NotifyAsyncFollowers(
+    WriteThread::Writer* last, WriteThread::Writer* leader,
+    const Status& status,
+    const std::function<void(WriteThread::Writer*, uint8_t)>& notify) {
+  TEST_SYNC_POINT("WriteThread::NotifyAsyncFollowers:Before");
+  while (last != leader) {
+    auto* previous = last->link_older;
+    last->status = status;
+    last->write_group = nullptr;
+    notify(last, status.ok() ? WriteThread::STATE_WAL_COMPLETED
+                             : WriteThread::STATE_COMPLETED);
+    last = previous;
+  }
+}
+}  // namespace
+
+void WriteThread::DetachAsyncFollowersKeepLeader(WriteGroup& group,
+                                                 const Status& status) {
+  Writer* leader = group.leader;
+  Writer* last = group.last_writer;
+  Writer* expected = last;
+  if (newest_writer_.compare_exchange_strong(expected, leader)) {
+    leader->link_newer = nullptr;
+  } else {
+    CreateMissingNewerLinks(expected);
+    Writer* next = last->link_newer;
+    assert(next != nullptr);
+    next->link_older = leader;
+    leader->link_newer = next;
+  }
+  group.last_writer = leader;
+  group.size = 1;
+  TEST_SYNC_POINT("WriteThread::DetachAsyncFollowersKeepLeader:Detached");
+  NotifyAsyncFollowers(last, leader, status, [this](Writer* w, uint8_t state) {
+    SetState(w, state);
+  });
+}
+
+void WriteThread::TransferAsyncGroupToMemtable(WriteGroup& group,
+                                               Writer* representative) {
+  Writer* leader = group.leader;
+  Writer* last = group.last_writer;
+  Writer dummy;
+  Writer* expected = last;
+  Writer* next_leader = nullptr;
+  bool has_dummy = newest_writer_.compare_exchange_strong(expected, &dummy);
+  if (!has_dummy) {
+    next_leader = FindNextLeader(expected, last);
+  }
+  TEST_SYNC_POINT("WriteThread::TransferAsyncGroupToMemtable:Boundary");
+  if (LinkOne(representative, &newest_memtable_writer_)) {
+    SetState(representative, STATE_MEMTABLE_WRITER_LEADER);
+  }
+  TEST_SYNC_POINT("WriteThread::TransferAsyncGroupToMemtable:Enqueued");
+  if (has_dummy) {
+    expected = &dummy;
+    if (!newest_writer_.compare_exchange_strong(expected, nullptr)) {
+      next_leader = FindNextLeader(expected, &dummy);
+    }
+  }
+  if (next_leader != nullptr) {
+    next_leader->link_older = nullptr;
+    SetState(next_leader, STATE_GROUP_LEADER);
+  }
+  group.last_writer = leader;
+  group.size = 1;
+  NotifyAsyncFollowers(
+      last, leader, Status::OK(),
+      [this](Writer* w, uint8_t state) { SetState(w, state); });
+}
+
+void WriteThread::ExitAsyncWalGroup(WriteGroup& group, const Status& status) {
+  Writer* leader = group.leader;
+  Writer* last = group.last_writer;
+  Writer* expected = last;
+  // Fix the active queue before any caller can destroy its Writer. As in
+  // ExitAsBatchGroupLeader, a concurrent new leader on an empty queue cannot
+  // retain references to this detached group.
+  if (!newest_writer_.compare_exchange_strong(expected, nullptr)) {
+    CreateMissingNewerLinks(expected);
+    Writer* next = last->link_newer;
+    next->link_older = nullptr;
+    SetState(next, STATE_GROUP_LEADER);
+  }
+  group.leader = group.last_writer = nullptr;
+  group.size = 0;
+  NotifyAsyncFollowers(last, leader, status, [this](Writer* w, uint8_t state) {
+    SetState(w, state);
+  });
+  leader->status = status;
+  leader->write_group = nullptr;
+  SetState(leader, status.ok() ? STATE_WAL_COMPLETED : STATE_COMPLETED);
+}
+
+static WriteThread::AdaptationContext async_mem_ctx("AsyncMemtableWriter");
+void WriteThread::WaitForAsyncMemtableWriter(Writer* representative) {
+  AwaitState(representative, STATE_MEMTABLE_WRITER_LEADER, &async_mem_ctx);
+}
+
 static WriteThread::AdaptationContext eu_ctx("EnterUnbatched");
 void WriteThread::EnterUnbatched(Writer* w, InstrumentedMutex* mu) {
   assert(w != nullptr && w->batch == nullptr);
@@ -768,7 +872,9 @@ void WriteThread::EnterUnbatched(Writer* w, InstrumentedMutex* mu) {
     // Last leader will not pick us as a follower since our batch is nullptr
     AwaitState(w, STATE_GROUP_LEADER, &eu_ctx);
   }
-  if (enable_pipelined_write_) {
+  if (async_commit_drain_) {
+    async_commit_drain_();
+  } else if (enable_pipelined_write_) {
     WaitForMemTableWriters();
   }
   mu->Lock();

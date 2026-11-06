@@ -206,6 +206,13 @@ Status TransactionDB::Open(
     const std::string& dbname,
     const std::vector<ColumnFamilyDescriptor>& column_families,
     std::vector<ColumnFamilyHandle*>* handles, TransactionDB** dbptr) {
+  if (db_options.enable_async_commit) {
+    *dbptr = nullptr;
+    handles->clear();
+    return Status::NotSupported(
+        "transactions do not support enable_async_commit");
+  }
+
   Status s;
   DB* db = nullptr;
   if (txn_db_options.write_policy == WRITE_COMMITTED &&

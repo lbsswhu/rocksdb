@@ -199,6 +199,7 @@ class autovector {
   }
 
   size_type size() const { return num_stack_items_ + vect_.size(); }
+  size_type capacity() const { return kSize + vect_.capacity(); }
 
   // resize does not guarantee anything about the contents of the newly
   // available elements

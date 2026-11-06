@@ -132,6 +132,9 @@ class Directories {
 //
 // Since it's a very large class, the definition of the functions is
 // divided in several db_impl_*.cc files, besides db_impl.cc.
+class AsyncCommitExecutor;
+struct AsyncCommitGroup;
+
 class DBImpl : public DB {
  public:
   DBImpl(const DBOptions& options, const std::string& dbname,
@@ -168,6 +171,12 @@ class DBImpl : public DB {
   virtual Status Write(const WriteOptions& options,
                        WriteBatch* updates) override;
 
+  // User read boundary only: internal GetImpl/snapshot calls must not wait
+  // for a group the current leader is itself applying.
+  Status PrepareAsyncCommitRead(const ReadOptions& options);
+  // Internal completion barrier, also used by db_bench; does not Flush/Get.
+  Status WaitForAsyncCommit();
+
   using DB::Get;
   virtual Status Get(const ReadOptions& options,
                      ColumnFamilyHandle* column_family, const Slice& key,
@@ -182,6 +191,8 @@ class DBImpl : public DB {
                           PinnableSlice* merge_operands,
                           GetMergeOperandsOptions* get_merge_operands_options,
                           int* number_of_operands) override {
+    Status ready = PrepareAsyncCommitRead(options);
+    if (!ready.ok()) return ready;
     GetImplOptions get_impl_options;
     get_impl_options.column_family = column_family;
     get_impl_options.merge_operands = merge_operands;
@@ -1267,6 +1278,30 @@ class DBImpl : public DB {
                    size_t batch_cnt = 0,
                    PreReleaseCallback* pre_release_callback = nullptr);
 
+  Status AsyncWriteImpl(const WriteOptions& options, WriteBatch* updates,
+                        uint64_t* log_used, uint64_t* seq_used);
+
+  struct AsyncCommitThreadContext {
+    SequenceNumber required_sequence = 0;
+  };
+  Status BuildAsyncCommitGroup(WriteThread::WriteGroup& writers,
+                               AsyncCommitGroup* group);
+  Status ApplyAsyncCommitGroup(const AsyncCommitGroup& group);
+  Status ApplyAsyncCommitRange(const AsyncCommitGroup& group, size_t index,
+                              bool concurrent);
+  void ScheduleAsyncCommitTargets(const AsyncCommitGroup& group);
+  void ReleaseAsyncCommitResources(AsyncCommitGroup* group);
+  void StartAsyncCommitExecutor();
+  Status StopAsyncCommitExecutor();
+  Status DrainAsyncCommits(uint64_t target_group_id);
+  void DrainAsyncCommitsWithDBMutex();
+  Status ReserveAsyncCommitBytes(size_t bytes, size_t already_reserved,
+                                 bool no_slowdown);
+  void ReleaseAsyncCommitGroup(AsyncCommitGroup* group);
+  Status AsyncCommitStatus(bool check_closing = true);
+  void FailAsyncCommit(const Status& status);
+  Status PublishAsyncCommitSequence(SequenceNumber sequence);
+
   Status PipelinedWriteImpl(const WriteOptions& options, WriteBatch* updates,
                             WriteCallback* callback = nullptr,
                             uint64_t* log_used = nullptr, uint64_t log_ref = 0,
@@ -1343,6 +1378,7 @@ class DBImpl : public DB {
 
  private:
   friend class DB;
+  friend class AsyncCommitExecutor;
   friend class ErrorHandler;
   friend class InternalStats;
   friend class PessimisticTransaction;
@@ -1663,6 +1699,10 @@ class DBImpl : public DB {
   inline void WaitForPendingWrites() {
     mutex_.AssertHeld();
     TEST_SYNC_POINT("DBImpl::WaitForPendingWrites:BeforeBlock");
+    if (async_commit_executor_) {
+      DrainAsyncCommitsWithDBMutex();
+      return;
+    }
     // In case of pipelined write is enabled, wait for all pending memtable
     // writers.
     if (immutable_db_options_.enable_pipelined_write) {
@@ -1711,6 +1751,12 @@ class DBImpl : public DB {
                       log::Writer* log_writer, uint64_t* log_used,
                       bool need_log_sync, bool need_log_dir_sync,
                       SequenceNumber sequence);
+
+  IOStatus WritePreparedBatchToWAL(const WriteBatch& batch,
+                                   log::Writer* log_writer, uint64_t* log_used,
+                                   bool need_log_sync, bool need_log_dir_sync,
+                                   size_t original_writer_count,
+                                   WriteBatch* to_be_cached_state = nullptr);
 
   IOStatus ConcurrentWriteToWAL(const WriteThread::WriteGroup& write_group,
                                 uint64_t* log_used,
@@ -2081,6 +2127,18 @@ class DBImpl : public DB {
 
   WriteThread write_thread_;
   WriteBatch tmp_batch_;
+
+  // Independent TLS instance prevents a new DB at a reused address inheriting
+  // R.
+  std::unique_ptr<ThreadLocalPtr> async_commit_context_;
+  std::unique_ptr<AsyncCommitExecutor> async_commit_executor_;
+  std::mutex async_commit_mutex_;
+  std::condition_variable async_commit_cv_;
+  Status async_commit_error_;
+  bool async_commit_closing_ = false;
+  size_t async_commit_pending_bytes_ = 0;
+  size_t async_commit_pending_groups_ = 0;
+
   // The write thread when the writers have no memtable write. This will be used
   // in 2PC to batch the prepares separately from the serial commit.
   WriteThread nonmem_write_thread_;

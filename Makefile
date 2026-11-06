@@ -1393,6 +1393,9 @@ thread_local_test: $(OBJ_DIR)/util/thread_local_test.o $(TEST_LIBRARY) $(LIBRARY
 work_queue_test: $(OBJ_DIR)/util/work_queue_test.o $(TEST_LIBRARY) $(LIBRARY)
 	$(AM_LINK)
 
+async_commit_queue_test: $(OBJ_DIR)/util/async_commit_queue_test.o $(TEST_LIBRARY) $(LIBRARY)
+	$(AM_LINK)
+
 corruption_test: $(OBJ_DIR)/db/corruption_test.o $(TEST_LIBRARY) $(LIBRARY)
 	$(AM_LINK)
 
@@ -1484,6 +1487,12 @@ db_sst_test: $(OBJ_DIR)/db/db_sst_test.o $(TEST_LIBRARY) $(LIBRARY)
 	$(AM_LINK)
 
 db_statistics_test: $(OBJ_DIR)/db/db_statistics_test.o $(TEST_LIBRARY) $(LIBRARY)
+	$(AM_LINK)
+
+async_commit_executor_test: $(OBJ_DIR)/db/async_commit_executor_test.o $(TEST_LIBRARY) $(LIBRARY)
+	$(AM_LINK)
+
+async_commit_test: $(OBJ_DIR)/db/async_commit_test.o $(TEST_LIBRARY) $(LIBRARY)
 	$(AM_LINK)
 
 db_write_test: $(OBJ_DIR)/db/db_write_test.o $(TEST_LIBRARY) $(LIBRARY)

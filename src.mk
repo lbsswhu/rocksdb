@@ -40,6 +40,8 @@ LIB_SOURCES =                                                   \
   db/db_impl/db_impl_open.cc                                    \
   db/db_impl/db_impl_readonly.cc                                \
   db/db_impl/db_impl_secondary.cc                               \
+  db/async_commit_executor.cc                             \
+  db/db_impl/db_impl_async_commit.cc                         \
   db/db_impl/db_impl_write.cc                                   \
   db/db_info_dumper.cc                                          \
   db/db_iter.cc                                                 \
@@ -452,6 +454,8 @@ TEST_MAIN_SOURCES =                                                     \
   db/db_wal_test.cc                                                     \
   db/db_with_timestamp_compaction_test.cc                               \
   db/db_write_buffer_manager_test.cc                                    \
+  db/async_commit_executor_test.cc                              \
+  db/async_commit_test.cc                                              \
   db/db_write_test.cc                                                   \
   db/dbformat_test.cc                                                   \
   db/deletefile_test.cc                                                 \
@@ -551,6 +555,7 @@ TEST_MAIN_SOURCES =                                                     \
   util/thread_list_test.cc                                              \
   util/thread_local_test.cc                                             \
   util/work_queue_test.cc                                               \
+  util/async_commit_queue_test.cc                                       \
   utilities/backupable/backupable_db_test.cc                            \
   utilities/blob_db/blob_db_test.cc                                     \
   utilities/cassandra/cassandra_format_test.cc                          \

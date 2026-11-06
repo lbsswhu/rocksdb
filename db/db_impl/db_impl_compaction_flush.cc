@@ -1900,6 +1900,14 @@ Status DBImpl::FlushMemTable(ColumnFamilyData* cfd,
       }
     }
     WaitForPendingWrites();
+    Status async_status = AsyncCommitStatus(false);
+    if (!async_status.ok()) {
+      if (!writes_stopped) {
+        write_thread_.ExitUnbatched(&w);
+        if (two_write_queues_) nonmem_write_thread_.ExitUnbatched(&nonmem_w);
+      }
+      return async_status;
+    }
 
     if (flush_reason != FlushReason::kErrorRecoveryRetryFlush &&
         (!cfd->mem()->IsEmpty() || !cached_recoverable_state_empty_.load())) {
@@ -2044,6 +2052,14 @@ Status DBImpl::AtomicFlushMemTables(
       }
     }
     WaitForPendingWrites();
+    Status async_status = AsyncCommitStatus(false);
+    if (!async_status.ok()) {
+      if (!writes_stopped) {
+        write_thread_.ExitUnbatched(&w);
+        if (two_write_queues_) nonmem_write_thread_.ExitUnbatched(&nonmem_w);
+      }
+      return async_status;
+    }
 
     for (auto cfd : column_family_datas) {
       if (cfd->IsDropped()) {

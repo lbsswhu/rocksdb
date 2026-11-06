@@ -201,6 +201,24 @@ class WriteBatchInternal {
                            bool batch_per_txn = true,
                            bool hint_per_batch = false);
 
+  // Async ranges borrow serialized records and the original protection array.
+  // Validate offsets, record boundaries/counts, protection bounds and supported
+  // ordinary-write tags before any insertion (also used before WAL append).
+  static Status ValidateAsyncCommitRange(const WriteBatch* batch, size_t begin,
+                                         size_t end, size_t first_record_index,
+                                         uint32_t record_count);
+  static Status InsertIntoRange(const WriteBatch* batch, size_t begin,
+                                size_t end, size_t first_record_index,
+                                uint32_t record_count, SequenceNumber sequence,
+                                ColumnFamilyMemTables* memtables,
+                                FlushScheduler* flush_scheduler,
+                                TrimHistoryScheduler* trim_history_scheduler,
+                                bool ignore_missing_column_families, DB* db,
+                                bool hint_per_batch = false,
+                                bool concurrent_memtable_writes = false);
+  static void ReserveForAppend(WriteBatch* batch, size_t record_count);
+  static size_t AllocatedBytes(const WriteBatch* batch);
+
   static Status Append(WriteBatch* dst, const WriteBatch* src,
                        const bool WAL_only = false);
 
