@@ -1047,13 +1047,23 @@ struct DBOptions {
   // Experimental WAL acknowledgment mode. With zero memtable workers, the
   // original leader applies each group; followers return after WAL success.
   // With a worker pool, every caller may return after WAL regardless of
-  // enable_pipelined_write. The pool independently overlaps WAL/application.
+  // enable_pipelined_write, unless async_commit_strong_visibility is enabled.
+  // The pool independently overlaps WAL/application.
   // A successful return inherits the durability of WriteOptions::sync. New
   // user read views on the same native thread and DB wait for that thread's
   // successful writes to be published. Other threads do not inherit this
   // dependency; explicit snapshots and existing iterators keep their history.
   // Compatible with enable_pipelined_write. Immutable after opening the DB.
   bool enable_async_commit = false;
+
+  // With async commit, wait for memtable sequence publication before returning
+  // success, for both the leader and followers. WAL and memtable execution
+  // remain decoupled; other WAL groups may advance while callers wait.
+  // Reads use normal published views without thread-local sequence waits.
+  // Does not change WriteOptions::sync durability semantics.
+  // Requires enable_async_commit and async_commit_memtable_threads > 0.
+  // Immutable after opening the DB. Default: false.
+  bool async_commit_strong_visibility = false;
 
   // Bounds the additional group buffers/metadata retained by async commit.
   // Without a pool a single-request payload is borrowed. With a pool all

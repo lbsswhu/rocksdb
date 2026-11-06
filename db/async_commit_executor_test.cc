@@ -16,6 +16,7 @@
 #include "db/write_batch_internal.h"
 #include "db/write_thread.h"
 #include "port/stack_trace.h"
+#include "rocksdb/convenience.h"
 #include "rocksdb/memtablerep.h"
 #include "rocksdb/slice_transform.h"
 #include "rocksdb/sst_file_writer.h"
@@ -70,6 +71,13 @@ class AsyncCommitExecutorTest : public DBTestBase,
     options.memtable_insert_hint_per_batch = true;
     return options;
   }
+  Status EnableStrongVisibility(Options* options) {
+    DBOptions parsed;
+    Status status = GetDBOptionsFromString(
+        *options, "async_commit_strong_visibility=true;", &parsed);
+    if (status.ok()) static_cast<DBOptions&>(*options) = parsed;
+    return status;
+  }
   void TearDown() override {
     SyncPoint::GetInstance()->DisableProcessing();
     SyncPoint::GetInstance()->ClearAllCallBacks();
@@ -85,6 +93,333 @@ class AsyncCommitExecutorTest : public DBTestBase,
     EXPECT_EQ(0U, bytes);
   }
 };
+
+TEST_P(AsyncCommitExecutorTest, StrongVisibilityWaitsForLeaderAndFollowers) {
+  Options options = PoolOptions();
+  ASSERT_OK(EnableStrongVisibility(&options));
+  Reopen(options);
+  PoolEvent forming, form, follower_queued, applying, release, next_wal;
+  PoolEvent leader_ack, follower_ack, next_ack;
+  std::atomic<bool> first_group{true};
+  auto* sp = SyncPoint::GetInstance();
+  sp->SetCallBack("DBImpl::AsyncWriteImpl:BeforeGroup", [&](void*) {
+    if (first_group.exchange(false)) {
+      forming.Set();
+      EXPECT_TRUE(form.Wait());
+    }
+  });
+  sp->SetCallBack("WriteThread::JoinBatchGroup:Wait", [&](void* arg) {
+    if (static_cast<WriteThread::Writer*>(arg)->state.load() !=
+        WriteThread::STATE_GROUP_LEADER)
+      follower_queued.Set();
+  });
+  sp->SetCallBack("DBImpl::AsyncWriteImpl:BeforeRange", [&](void* arg) {
+    if (*static_cast<SequenceNumber*>(arg) == 1) {
+      applying.Set();
+      EXPECT_TRUE(release.Wait());
+    }
+  });
+  sp->SetCallBack("DBImpl::AsyncWriteImpl:WALComplete", [&](void* arg) {
+    if (WriteBatchInternal::Sequence(static_cast<WriteBatch*>(arg)) == 3)
+      next_wal.Set();
+  });
+  sp->EnableProcessing();
+  std::thread leader([&] {
+    EXPECT_OK(db_->Put(Writes(), "first", "one"));
+    EXPECT_GE(db_->GetLatestSequenceNumber(), 2U);
+    leader_ack.Set();
+  });
+  EXPECT_TRUE(forming.Wait());
+  std::thread follower([&] {
+    EXPECT_OK(db_->Put(Writes(), "second", "two"));
+    EXPECT_GE(db_->GetLatestSequenceNumber(), 2U);
+    follower_ack.Set();
+  });
+  EXPECT_TRUE(follower_queued.Wait());
+  form.Set();
+  EXPECT_TRUE(applying.Wait());
+  std::thread next([&] {
+    EXPECT_OK(db_->Put(Writes(), "third", "three"));
+    EXPECT_GE(db_->GetLatestSequenceNumber(), 3U);
+    next_ack.Set();
+  });
+  // Waiting callers must release the WAL gate before publication.
+  EXPECT_TRUE(next_wal.Wait());
+  EXPECT_FALSE(leader_ack.Wait(std::chrono::milliseconds(30)));
+  EXPECT_FALSE(follower_ack.Wait(std::chrono::milliseconds(30)));
+  EXPECT_FALSE(next_ack.Wait(std::chrono::milliseconds(30)));
+  EXPECT_EQ(0U, db_->GetLatestSequenceNumber());
+  release.Set();
+  leader.join();
+  follower.join();
+  next.join();
+  EXPECT_EQ("one", Get("first"));
+  EXPECT_EQ("two", Get("second"));
+  EXPECT_EQ("three", Get("third"));
+  EXPECT_OK(dbfull()->WaitForAsyncCommit());
+  ExpectDrained();
+}
+
+TEST_P(AsyncCommitExecutorTest,
+       StrongVisibilityWaitsForEarlierGroupPublication) {
+  Options options = PoolOptions();
+  if (options.async_commit_memtable_threads < 2) return;
+  ASSERT_OK(EnableStrongVisibility(&options));
+  Reopen(options);
+  PoolEvent applying, release, later_applied, first_ack, later_ack;
+  auto* sp = SyncPoint::GetInstance();
+  sp->SetCallBack("DBImpl::AsyncWriteImpl:BeforeRange", [&](void* arg) {
+    if (*static_cast<SequenceNumber*>(arg) == 1) {
+      applying.Set();
+      EXPECT_TRUE(release.Wait());
+    }
+  });
+  sp->SetCallBack("DBImpl::AsyncWriteImpl:RangeComplete", [&](void* arg) {
+    if (*static_cast<SequenceNumber*>(arg) == 2) later_applied.Set();
+  });
+  sp->EnableProcessing();
+  std::thread first([&] {
+    EXPECT_OK(db_->Put(Writes(), "first", "one"));
+    first_ack.Set();
+  });
+  EXPECT_TRUE(applying.Wait());
+  std::thread later([&] {
+    EXPECT_OK(db_->Put(Writes(), "later", "two"));
+    later_ack.Set();
+  });
+  EXPECT_TRUE(later_applied.Wait());
+  EXPECT_FALSE(later_ack.Wait(std::chrono::milliseconds(30)));
+  EXPECT_FALSE(first_ack.IsSet());
+  EXPECT_EQ(0U, db_->GetLatestSequenceNumber());
+  EXPECT_EQ("NOT_FOUND", Get("later"));
+  release.Set();
+  first.join();
+  later.join();
+  EXPECT_EQ(2U, db_->GetLatestSequenceNumber());
+  EXPECT_EQ("two", Get("later"));
+}
+
+TEST_P(AsyncCommitExecutorTest,
+       StrongVisibilityEmptyBatchesWaitForPriorSequence) {
+  Options options = PoolOptions();
+  ASSERT_OK(EnableStrongVisibility(&options));
+  Reopen(options);
+  WriteBatch initial_empty, initial_metadata;
+  ASSERT_OK(db_->Write(Writes(), &initial_empty));
+  ASSERT_OK(initial_metadata.PutLogData("initial metadata"));
+  ASSERT_OK(db_->Write(Writes(), &initial_metadata));
+  ASSERT_OK(dbfull()->WaitForAsyncCommit());
+  ASSERT_EQ(0U, db_->GetLatestSequenceNumber());
+  PoolEvent applying, release, empty_wal, log_wal, empty_ack, log_ack;
+  std::atomic<int> wal_count{0};
+  auto* sp = SyncPoint::GetInstance();
+  sp->SetCallBack("DBImpl::AsyncWriteImpl:BeforeApply", [&](void* arg) {
+    if (WriteBatchInternal::Sequence(static_cast<WriteBatch*>(arg)) == 1) {
+      applying.Set();
+      EXPECT_TRUE(release.Wait());
+    }
+  });
+  sp->SetCallBack("DBImpl::AsyncWriteImpl:WALComplete", [&](void*) {
+    const int count = ++wal_count;
+    if (count == 2) empty_wal.Set();
+    if (count == 3) log_wal.Set();
+  });
+  sp->EnableProcessing();
+  std::thread first([&] { EXPECT_OK(db_->Put(Writes(), "first", "v")); });
+  EXPECT_TRUE(applying.Wait());
+  std::thread empty([&] {
+    WriteBatch batch;
+    EXPECT_OK(db_->Write(Writes(), &batch));
+    empty_ack.Set();
+  });
+  EXPECT_TRUE(empty_wal.Wait());
+  std::thread log([&] {
+    WriteBatch batch;
+    EXPECT_OK(batch.PutLogData("metadata"));
+    EXPECT_OK(db_->Write(Writes(), &batch));
+    log_ack.Set();
+  });
+  EXPECT_TRUE(log_wal.Wait());
+  EXPECT_FALSE(empty_ack.Wait(std::chrono::milliseconds(30)));
+  EXPECT_FALSE(log_ack.Wait(std::chrono::milliseconds(30)));
+  release.Set();
+  first.join();
+  empty.join();
+  log.join();
+  EXPECT_EQ(1U, db_->GetLatestSequenceNumber());
+  EXPECT_OK(dbfull()->WaitForAsyncCommit());
+  ExpectDrained();
+}
+
+TEST_P(AsyncCommitExecutorTest, StrongVisibilityReadsUsePublishedViews) {
+  Options options = PoolOptions();
+  ASSERT_OK(EnableStrongVisibility(&options));
+  Reopen(options);
+  ASSERT_OK(db_->Put(Writes(), "existing", "old"));
+  PoolEvent applying, release, acknowledged;
+  auto* sp = SyncPoint::GetInstance();
+  sp->SetCallBack("DBImpl::AsyncWriteImpl:BeforeApply", [&](void*) {
+    applying.Set();
+    EXPECT_TRUE(release.Wait());
+  });
+  sp->EnableProcessing();
+  std::thread writer([&] {
+    EXPECT_OK(db_->Put(Writes(), "pending", "new"));
+    acknowledged.Set();
+  });
+  EXPECT_TRUE(applying.Wait());
+  // This thread has already written successfully. Its new reads must not
+  // wait for the outstanding sequence allocated to another caller.
+  ReadOptions read;
+  read.deadline = std::chrono::microseconds(env_->NowMicros() + 20000);
+  std::string value;
+  EXPECT_OK(db_->Get(read, "existing", &value));
+  EXPECT_EQ("old", value);
+  EXPECT_TRUE(db_->Get(read, "pending", &value).IsNotFound());
+  std::vector<std::string> values;
+  auto statuses =
+      db_->MultiGet(read, {Slice("existing"), Slice("pending")}, &values);
+  EXPECT_OK(statuses[0]);
+  EXPECT_TRUE(statuses[1].IsNotFound());
+  EXPECT_EQ("old", values[0]);
+  const Snapshot* snapshot = db_->GetSnapshot();
+  std::unique_ptr<Iterator> iter(db_->NewIterator(read));
+  iter->Seek("pending");
+  EXPECT_FALSE(iter->Valid());
+  EXPECT_OK(iter->status());
+  EXPECT_FALSE(acknowledged.IsSet());
+  release.Set();
+  writer.join();
+  EXPECT_EQ("new", Get("pending"));
+  ReadOptions historical;
+  historical.snapshot = snapshot;
+  EXPECT_TRUE(db_->Get(historical, "pending", &value).IsNotFound());
+  iter->Seek("pending");
+  EXPECT_FALSE(iter->Valid());
+  EXPECT_OK(iter->status());
+  iter.reset();
+  db_->ReleaseSnapshot(snapshot);
+}
+
+TEST_P(AsyncCommitExecutorTest, StrongVisibilityApplyFailureReachesAllCallers) {
+  Options options = PoolOptions();
+  ASSERT_OK(EnableStrongVisibility(&options));
+  options.avoid_flush_during_shutdown = true;
+  Reopen(options);
+  PoolEvent forming, form, follower_queued, applying, release;
+  std::atomic<bool> first_group{true};
+  auto* sp = SyncPoint::GetInstance();
+  sp->SetCallBack("DBImpl::AsyncWriteImpl:BeforeGroup", [&](void*) {
+    if (first_group.exchange(false)) {
+      forming.Set();
+      EXPECT_TRUE(form.Wait());
+    }
+  });
+  sp->SetCallBack("WriteThread::JoinBatchGroup:Wait", [&](void* arg) {
+    if (static_cast<WriteThread::Writer*>(arg)->state.load() !=
+        WriteThread::STATE_GROUP_LEADER)
+      follower_queued.Set();
+  });
+  sp->SetCallBack("DBImpl::AsyncWriteImpl:BeforeApply", [&](void*) {
+    applying.Set();
+    EXPECT_TRUE(release.Wait());
+  });
+  sp->SetCallBack("DBImpl::AsyncWriteImpl:ApplyStatus", [&](void* arg) {
+    *static_cast<Status*>(arg) =
+        Status::IOError("strong visibility apply failed");
+  });
+  sp->EnableProcessing();
+  Status leader_status, follower_status;
+  std::thread leader(
+      [&] { leader_status = db_->Put(Writes(), "first", "one"); });
+  EXPECT_TRUE(forming.Wait());
+  std::thread follower(
+      [&] { follower_status = db_->Put(Writes(), "second", "two"); });
+  EXPECT_TRUE(follower_queued.Wait());
+  form.Set();
+  EXPECT_TRUE(applying.Wait());
+  release.Set();
+  leader.join();
+  follower.join();
+  EXPECT_TRUE(leader_status.IsIOError());
+  EXPECT_TRUE(follower_status.IsIOError());
+  EXPECT_EQ(0U, db_->GetLatestSequenceNumber());
+  EXPECT_TRUE(dbfull()->WaitForAsyncCommit().IsIOError());
+  ExpectDrained();
+  sp->DisableProcessing();
+  sp->ClearAllCallBacks();
+  EXPECT_TRUE(db_->Close().IsIOError());
+  Reopen(options);
+  EXPECT_EQ("one", Get("first"));
+  EXPECT_EQ("two", Get("second"));
+}
+
+TEST_P(AsyncCommitExecutorTest,
+       StrongVisibilityWALFailureReturnsWithoutPublication) {
+  Options options = PoolOptions();
+  ASSERT_OK(EnableStrongVisibility(&options));
+  Reopen(options);
+  auto* sp = SyncPoint::GetInstance();
+  sp->SetCallBack("DBImpl::AsyncWriteImpl:WALStatus", [&](void* arg) {
+    *static_cast<IOStatus*>(arg) =
+        IOStatus::IOError("strong visibility WAL failed");
+  });
+  sp->EnableProcessing();
+  EXPECT_TRUE(db_->Put(Writes(), "failed", "v").IsIOError());
+  EXPECT_EQ(0U, db_->GetLatestSequenceNumber());
+  EXPECT_TRUE(dbfull()->WaitForAsyncCommit().IsIOError());
+  ExpectDrained();
+  sp->DisableProcessing();
+  sp->ClearAllCallBacks();
+  EXPECT_TRUE(db_->Close().IsIOError());
+}
+
+TEST_P(AsyncCommitExecutorTest, StrongVisibilityLaterErrorWakesEarlierWaiter) {
+  Options options = PoolOptions();
+  if (options.async_commit_memtable_threads < 2) return;
+  ASSERT_OK(EnableStrongVisibility(&options));
+  Reopen(options);
+  PoolEvent applying, release, first_ack, later_ack;
+  static thread_local SequenceNumber current_sequence = 0;
+  auto* sp = SyncPoint::GetInstance();
+  sp->SetCallBack("DBImpl::AsyncWriteImpl:BeforeRange", [&](void* arg) {
+    current_sequence = *static_cast<SequenceNumber*>(arg);
+    if (current_sequence == 1) {
+      applying.Set();
+      EXPECT_TRUE(release.Wait());
+    }
+  });
+  sp->SetCallBack("DBImpl::AsyncWriteImpl:ApplyStatus", [&](void* arg) {
+    if (current_sequence == 2)
+      *static_cast<Status*>(arg) = Status::IOError("later strong group failed");
+  });
+  sp->EnableProcessing();
+  Status first_status, later_status;
+  std::thread first([&] {
+    first_status = db_->Put(Writes(), "first", "one");
+    first_ack.Set();
+  });
+  EXPECT_TRUE(applying.Wait());
+  std::thread later([&] {
+    later_status = db_->Put(Writes(), "later", "two");
+    later_ack.Set();
+  });
+  // A terminal error must wake every publication waiter, even when another
+  // worker is still holding the uncompleted prefix. Cleanup drains separately.
+  EXPECT_TRUE(later_ack.Wait(std::chrono::seconds(2)));
+  EXPECT_TRUE(first_ack.Wait(std::chrono::seconds(2)));
+  EXPECT_EQ(0U, db_->GetLatestSequenceNumber());
+  release.Set();
+  first.join();
+  later.join();
+  EXPECT_TRUE(first_status.IsIOError());
+  EXPECT_TRUE(later_status.IsIOError());
+  EXPECT_TRUE(dbfull()->WaitForAsyncCommit().IsIOError());
+  ExpectDrained();
+  sp->DisableProcessing();
+  sp->ClearAllCallBacks();
+  EXPECT_TRUE(db_->Close().IsIOError());
+}
 
 TEST_P(AsyncCommitExecutorTest, LeaderReturnsAndNextWALRunsBeforeApply) {
   Reopen(PoolOptions());

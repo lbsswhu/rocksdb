@@ -108,13 +108,21 @@ Status DBImpl::PublishAsyncCommitSequence(SequenceNumber sequence) {
 }
 
 Status DBImpl::PrepareAsyncCommitRead(const ReadOptions& options) {
-  if (!immutable_db_options_.enable_async_commit) return Status::OK();
+  if (!immutable_db_options_.enable_async_commit ||
+      immutable_db_options_.async_commit_strong_visibility)
+    return Status::OK();
   auto* context =
       static_cast<AsyncCommitThreadContext*>(async_commit_context_->Get());
   if (!context) return Status::OK();
   SequenceNumber target = context->required_sequence;
   if (versions_->LastSequence() >= target) return Status::OK();
   TEST_SYNC_POINT_CALLBACK("DBImpl::PrepareAsyncCommitRead:Wait", &target);
+  return WaitForAsyncCommitSequence(target, options);
+}
+
+Status DBImpl::WaitForAsyncCommitSequence(SequenceNumber target,
+                                          const ReadOptions& options) {
+  if (versions_->LastSequence() >= target) return Status::OK();
   std::unique_lock<std::mutex> lock(async_commit_mutex_);
   while (versions_->LastSequence() < target) {
     if (!async_commit_error_.ok()) return async_commit_error_;
@@ -342,11 +350,16 @@ Status DBImpl::ApplyAsyncCommitGroup(const AsyncCommitGroup& group) {
 Status DBImpl::AsyncWriteImpl(const WriteOptions& options, WriteBatch* batch,
                               uint64_t* log_used, uint64_t* seq_used) {
   // Allocate before enqueue, never after returning a successful WAL result.
-  auto* context =
-      static_cast<AsyncCommitThreadContext*>(async_commit_context_->Get());
-  if (!context) {
-    context = new AsyncCommitThreadContext;
-    async_commit_context_->Reset(context);
+  const bool strong_visibility =
+      immutable_db_options_.async_commit_strong_visibility;
+  AsyncCommitThreadContext* context = nullptr;
+  if (!strong_visibility) {
+    context =
+        static_cast<AsyncCommitThreadContext*>(async_commit_context_->Get());
+    if (!context) {
+      context = new AsyncCommitThreadContext;
+      async_commit_context_->Reset(context);
+    }
   }
   Status status = AsyncCommitStatus();
   if (!status.ok()) return status;
@@ -356,9 +369,16 @@ Status DBImpl::AsyncWriteImpl(const WriteOptions& options, WriteBatch* batch,
   write_thread_.JoinBatchGroup(&writer);
   auto finish = [&]() {
     Status result = writer.FinalStatus();
-    if (result.ok() && writer.async_has_sequence) {
-      context->required_sequence =
-          std::max(context->required_sequence, writer.async_end_sequence);
+    if (result.ok()) {
+      if (strong_visibility) {
+        // Every caller has left the WAL queue before entering this wait. The
+        // worker pool publishes the ordered prefix independently of callers.
+        result = WaitForAsyncCommitSequence(writer.async_end_sequence,
+                                            ReadOptions());
+      } else if (writer.async_has_sequence) {
+        context->required_sequence =
+            std::max(context->required_sequence, writer.async_end_sequence);
+      }
     }
     if (log_used) *log_used = writer.log_used;
     if (seq_used) *seq_used = writer.sequence;
@@ -400,6 +420,7 @@ Status DBImpl::AsyncWriteImpl(const WriteOptions& options, WriteBatch* batch,
     if (group.record_count > kMaxSequenceNumber - allocated) {
       status = Status::InvalidArgument("async commit sequence exhausted");
     } else {
+      group.last_sequence = allocated + group.record_count;
       SequenceNumber next = allocated + (group.record_count != 0);
       size_t i = 0;
       for (auto* w : wal_group) {
@@ -407,12 +428,15 @@ Status DBImpl::AsyncWriteImpl(const WriteOptions& options, WriteBatch* batch,
         range.first_sequence = std::min(next, kMaxSequenceNumber);
         w->sequence = range.first_sequence;
         w->async_has_sequence = range.record_count != 0;
-        if (w->async_has_sequence)
-          w->async_end_sequence = next + range.record_count - 1;
+        // Metadata-only callers consume no sequence, but strong visibility
+        // still waits for preceding writes. Group publication is atomic, so
+        // using the group's end for those callers is conservative and safe.
+        w->async_end_sequence = w->async_has_sequence
+                                    ? next + range.record_count - 1
+                                    : group.last_sequence;
         w->log_used = log_number;
         next += range.record_count;
       }
-      group.last_sequence = allocated + group.record_count;
       // Recovery computes the last sequence as the inserter's next sequence
       // minus one. Empty/LogData-only batches must therefore start at A+1 too,
       // or trailing metadata would hide the last acknowledged update on reopen.
@@ -478,7 +502,8 @@ Status DBImpl::AsyncWriteImpl(const WriteOptions& options, WriteBatch* batch,
     // Sync writes benefit from notifying this group's callers before the next
     // WAL snapshot. Without sync, that serialization makes the short WAL path
     // pay for every follower notification before progressing to the next group.
-    // Both policies publish first and never wait for memtable application.
+    // Both policies enqueue first and release the WAL gate before finish()
+    // optionally waits for memtable sequence publication.
     if (options.sync)
       write_thread_.DetachAsyncFollowersKeepLeader(wal_group, Status::OK());
     TEST_SYNC_POINT("AsyncCommitExecutor::Submit:BeforeWake");

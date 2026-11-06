@@ -233,6 +233,13 @@ Status DBImpl::ValidateOptions(
 }
 
 Status DBImpl::ValidateOptions(const DBOptions& db_options) {
+  if (db_options.async_commit_strong_visibility &&
+      (!db_options.enable_async_commit ||
+       db_options.async_commit_memtable_threads <= 0)) {
+    return Status::InvalidArgument(
+        "async_commit_strong_visibility requires enable_async_commit and "
+        "async_commit_memtable_threads > 0");
+  }
   if (db_options.async_commit_memtable_threads < 0 ||
       (!db_options.enable_async_commit &&
        db_options.async_commit_memtable_threads != 0) ||

@@ -138,6 +138,8 @@ DBOptions BuildDBOptions(const ImmutableDBOptions& immutable_db_options,
   options.delayed_write_rate = mutable_db_options.delayed_write_rate;
   options.enable_pipelined_write = immutable_db_options.enable_pipelined_write;
   options.enable_async_commit = immutable_db_options.enable_async_commit;
+  options.async_commit_strong_visibility =
+      immutable_db_options.async_commit_strong_visibility;
   options.async_commit_memtable_threads =
       immutable_db_options.async_commit_memtable_threads;
   options.max_async_commit_pending_groups =

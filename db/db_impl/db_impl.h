@@ -1301,6 +1301,8 @@ class DBImpl : public DB {
   Status AsyncCommitStatus(bool check_closing = true);
   void FailAsyncCommit(const Status& status);
   Status PublishAsyncCommitSequence(SequenceNumber sequence);
+  Status WaitForAsyncCommitSequence(SequenceNumber target,
+                                    const ReadOptions& options);
 
   Status PipelinedWriteImpl(const WriteOptions& options, WriteBatch* updates,
                             WriteCallback* callback = nullptr,

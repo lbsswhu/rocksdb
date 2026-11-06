@@ -317,6 +317,7 @@ TEST_F(OptionsSettableTest, DBOptionsAllFieldsSettable) {
                              "fail_if_options_file_error=false;"
                              "enable_pipelined_write=false;"
                              "enable_async_commit=false;"
+                             "async_commit_strong_visibility=false;"
                              "max_async_commit_pending_bytes=67108864;"
                              "async_commit_memtable_threads=3;"
                              "max_async_commit_pending_groups=4096;"

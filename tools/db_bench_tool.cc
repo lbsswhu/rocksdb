@@ -1184,9 +1184,12 @@ DEFINE_uint64(delayed_write_rate, 8388608u,
               "Limited bytes allowed to DB when soft_rate_limit or "
               "level0_slowdown_writes_trigger triggers");
 
+DEFINE_bool(enable_async_commit, false,
+            "Acknowledge async writes after WAL; a worker pool also releases "
+            "the leader");
 DEFINE_bool(
-    enable_async_commit, false,
-    "Acknowledge async writes after WAL; pool + pipelining also releases leader");
+    async_commit_strong_visibility, false,
+    "Wait for async memtable publication before successful write return");
 DEFINE_int32(async_commit_memtable_threads, 0,
              "Dedicated async commit memtable workers (zero uses original leader)");
 DEFINE_uint64(max_async_commit_pending_groups, 4096,
@@ -2211,15 +2214,16 @@ class Stats {
 
   // Lightweight acknowledgment summary has no file-counter reset/flush side
   // effects. Render it only after the completion timestamp has been captured.
-  void ReportAsyncAcknowledgments(const Slice& name) const {
+  void ReportAsyncAcknowledgments(const Slice& name,
+                                  bool strong_visibility) const {
     const double elapsed = std::max(1e-6, (finish_ - start_) * 1e-6);
-    fprintf(stdout, "%s-wal-ack : %11.3f micros/op %0.0f ops/sec;\n",
-            name.ToString().c_str(), done_ ? seconds_ * 1e6 / done_ : 0,
-            done_ / elapsed);
+    fprintf(stdout, "%s-%s-ack : %11.3f micros/op %0.0f ops/sec;\n",
+            name.ToString().c_str(), strong_visibility ? "published" : "wal",
+            done_ ? seconds_ * 1e6 / done_ : 0, done_ / elapsed);
   }
 
   // Drain extends completed throughput's wall time. Keep seconds_/histograms
-  // as API acknowledgment latency, which does not include background work.
+  // as API acknowledgment latency, including publication waits in strong mode.
   void ExtendForAsyncDrain(uint64_t end) { finish_ = std::max(finish_, end); }
 
   void SetId(int id) { id_ = id; }
@@ -3799,8 +3803,13 @@ class Benchmark {
     // before rendering reports, and reset file-operation counters only once.
     bool pool_mode = db_.db &&
                      db_.db->GetDBOptions().async_commit_memtable_threads > 0;
-    for (auto& db : multi_dbs_)
+    bool strong_visibility =
+        db_.db && db_.db->GetDBOptions().async_commit_strong_visibility;
+    for (auto& db : multi_dbs_) {
       pool_mode |= db.db && db.db->GetDBOptions().async_commit_memtable_threads > 0;
+      strong_visibility |=
+          db.db && db.db->GetDBOptions().async_commit_strong_visibility;
+    }
     uint64_t drain_start = FLAGS_env->NowMicros();
     TEST_SYNC_POINT("DBBench::RunBenchmark:BeforeAsyncDrain");
     auto drain_async = [](DB* db) {
@@ -3849,11 +3858,13 @@ class Benchmark {
     merge_stats.ResetTimingForMerge();
     for (int i = 0; i < n; i++) merge_stats.Merge(arg[i].thread->stats);
     if (pool_mode) {
-      merge_stats.ReportAsyncAcknowledgments(name);
+      merge_stats.ReportAsyncAcknowledgments(name, strong_visibility);
       merge_stats.ExtendForAsyncDrain(drain_end);
-      fprintf(stdout, "Async commit drain: %" PRIu64
-                      " us (main throughput includes drain; latency is WAL ack)\n",
-              drain_end - drain_start);
+      fprintf(stdout,
+              "Async commit drain: %" PRIu64
+              " us (main throughput includes drain; latency is %s ack)\n",
+              drain_end - drain_start,
+              strong_visibility ? "sequence publication" : "WAL");
     }
     merge_stats.Report(name);
 
@@ -4350,6 +4361,8 @@ class Benchmark {
         FLAGS_enable_write_thread_adaptive_yield;
     options.enable_pipelined_write = FLAGS_enable_pipelined_write;
     options.enable_async_commit = FLAGS_enable_async_commit;
+    options.async_commit_strong_visibility =
+        FLAGS_async_commit_strong_visibility;
     options.async_commit_memtable_threads = FLAGS_async_commit_memtable_threads;
     options.max_async_commit_pending_groups = FLAGS_max_async_commit_pending_groups;
     options.max_async_commit_pending_bytes =

@@ -30,6 +30,44 @@ class AsyncCommitTest : public DBTestBase {
   AsyncCommitTest() : DBTestBase("async_commit_test", true) {}
 };
 
+TEST_F(AsyncCommitTest, StrongVisibilityOptionsRoundTripAndValidation) {
+  std::string serialized;
+  ASSERT_OK(GetStringFromDBOptions(&serialized, DBOptions()));
+  ASSERT_NE(std::string::npos,
+            serialized.find("async_commit_strong_visibility=false"));
+  DBOptions parsed;
+  ASSERT_OK(GetDBOptionsFromString(
+      DBOptions(),
+      "enable_async_commit=true;async_commit_memtable_threads=1;"
+      "async_commit_strong_visibility=true;",
+      &parsed));
+  Options options(parsed, ColumnFamilyOptions());
+  options.create_if_missing = true;
+  Reopen(options);
+  DBOptions loaded;
+  std::vector<ColumnFamilyDescriptor> columns;
+  ASSERT_OK(LoadLatestOptions(dbname_, env_, &loaded, &columns));
+  ASSERT_OK(GetStringFromDBOptions(&serialized, loaded));
+  ASSERT_NE(std::string::npos,
+            serialized.find("async_commit_strong_visibility=true"));
+  ASSERT_OK(GetStringFromDBOptions(&serialized, db_->GetDBOptions()));
+  ASSERT_NE(std::string::npos,
+            serialized.find("async_commit_strong_visibility=true"));
+  EXPECT_FALSE(
+      db_->SetDBOptions({{"async_commit_strong_visibility", "false"}}).ok());
+  Close();
+  Options invalid = options;
+  invalid.async_commit_memtable_threads = 0;
+  EXPECT_TRUE(TryReopen(invalid).IsInvalidArgument());
+  invalid = options;
+  invalid.enable_async_commit = false;
+  invalid.async_commit_memtable_threads = 0;
+  EXPECT_TRUE(TryReopen(invalid).IsInvalidArgument());
+  Reopen(options);
+  ASSERT_OK(Put("visible", "value"));
+  EXPECT_EQ("value", Get("visible"));
+}
+
 TEST_F(AsyncCommitTest, PoolOptionsRoundTrip) {
   DBOptions parsed;
   ASSERT_OK(GetDBOptionsFromString(

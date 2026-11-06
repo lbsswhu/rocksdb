@@ -1,6 +1,15 @@
 # RocksDB 异步提交详细设计
 
-文档分为两个版本：第 1～21 节记录已经落地的原 leader 应用方案（V1）；[第 22 节](#22-v2wal-与-memtable-线程池解耦方案)定义本次已在工作区落地、默认不开启的线程池方案（V2）。V2 明确替代的所有权、执行顺序、返回时机和屏障规则，以第 22 节为准；其余读取语义、WAL 格式和拒绝范围继续沿用 V1。最新完整原生/V1/V2 同批性能重测见第 22.19 节；第 22.17、22.18 节保留早先批次。
+第 1～21 节记录已经落地的原 leader 应用方案（V1）；[第 22 节](#22-v2wal-与-memtable-线程池解耦方案)
+记录默认不开启的线程池方案（V2）及后续 V3 无锁任务队列实现。所有权、执行顺序、
+返回时机和屏障规则以第 22 节相应版本为准，其余读取语义、WAL 格式和拒绝范围沿用 V1。
+原生/V1/V2/V3 串行 memtable 同批重测见第 22.24 节，并发 memtable 对比见第 22.27 节；
+第 22.17～22.19 节保留早先批次。
+
+[第 23 节](#23-strong-visibility-模式)定义默认关闭的 `async_commit_strong_visibility`。
+开启该模式后，线程池写调用等到
+sequence 发布再返回成功，读操作直接使用已发布视图，不建立线程本地读前等待依赖。
+该模式的写返回与读等待规则以第 23 节为准。
 
 本文定义 `enable_async_commit` 的首版实现，供修改写入队列、读路径、选项和测试时使用。代码基线为 RocksDB 6.26.1，提交 `4d57a393a`。
 
@@ -1720,3 +1729,346 @@ NoSync 每千写只有约 0.9～1.3 次空闲休眠；同步写约 63 次，与�
 提交前重新运行 Debug 的 464 项 async/executor/queue 测试和 81 项相关回归，共 545 项全部通过；源码与此前 ASAN/UBSAN、TSAN 及正式性能验证的产品快照一致。记录位于 `build/async-commit-checkpoint/`。
 
 本次不把诊断的 10 μs 空闲期限或 L0=1000 阈值改为产品默认值。原始基准、profiling 数据、诊断库和旧 V2 二进制继续保留在本地 `build/`，不纳入代码提交。工作树保留用于继续开发。
+
+## 22.27 原生并发 memtable 与 V3 多 worker 对比（2026-11-06）
+
+### 配置与完成口径
+
+基于本地提交 `8fe481080d9022fda26b0c3bcd7d7bf2c544528c`，所有配置使用同一个已验证的 Release 可执行文件和共享库。这里“原生”指当前提交关闭 `enable_async_commit` 后的原生写入路径。产品源码、原有 Release 构建和默认参数均未改动。
+
+6 个模式 × sync 开/关 × pipelined write 开/关 × 3 轮，共 72 个正式样本；每次 30 秒，每轮打乱顺序。另有 24 个 2 秒预检及 3 个独立 CPU profile，不计入正式结果。此次重新测量串行参考组，不把第 22.24 节的三次 60 秒结果混入统计；短运行的 LSM 演化与之前不同。
+
+机器是 WSL2 下报告 16 个逻辑 CPU 的 i7-13700 环境。统一 16 个前台线程、batch_size=1、16 B key、1 KiB value、1M key 空间、seed=1000 的 fillrandom Put（含覆盖），每次全新 DB；WAL 开启、use_fsync=true、SkipListFactory、无压缩、64 MiB write buffer、max_write_buffer_number=2、max_background_jobs=2。保留自动 flush/compaction，L0 slowdown/stop 为 20/36；写线程等待参数仍为 slow yield 3 μs、max yield 100 μs、自适应开启。
+
+原生串行与 Async 1 设置 allow_concurrent_memtable_write=false；原生并发与 Async 2/4/8 设置 true，线程池大小分别为 2/4/8。原生并发由写组内前台线程并行插入，最多受这 16 个调用者限制；async 的 16 个前台调用者之外还增加独立 worker。因此这是同前台负载的实现/配置比较，不是相同总线程数或固定 CPU 预算比较。未设置 affinity、未清缓存，正式期间没有同时运行其他基准、编译或测试。
+
+完成吞吐包含最后的内部 WaitForAsyncCommit 排空，不执行 Get 或强制 Flush。所有 219,317,248 次写的操作数均与 write.self+write.other 及 DB_WRITE 直方图计数相符；WAL 同步计数与 sync 开关一致。每次检查实际映射的共享库和 OPTIONS；异步最终 pending_groups/pending_bytes/terminal_error 全为零。最终 drain 最大 6.918 ms，已计入吞吐分母。
+
+### 完成写吞吐
+
+单位 ops/s，各自三轮中位数。Async 后的数字是 worker 数。
+
+| sync | 流水线 | 原生串行 | 原生并发 | Async 1 | Async 2 | Async 4 | Async 8 |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| false | 关闭 | 253,148 | 124,195 | 287,589 | 246,778 | 114,178 | 59,576 |
+| false | 开启 | 273,663 | 287,694 | 304,697 | 254,127 | 113,180 | 61,164 |
+| true | 关闭 | 1,769 | 1,707 | 3,315 | 3,381 | 3,436 | 3,420 |
+| true | 开启 | 1,749 | 1,732 | 3,205 | 3,307 | 3,296 | 3,348 |
+
+Async 多 worker 相对原生并发的中位数变化：
+
+| sync | 流水线 | Async 2 | Async 4 | Async 8 |
+| --- | --- | ---: | ---: | ---: |
+| false | 关闭 | +98.70% | -8.07% | -52.03% |
+| false | 开启 | -11.67% | -60.66% | -78.74% |
+| true | 关闭 | +98.07% | +101.29% | +100.35% |
+| true | 开启 | +90.94% | +90.30% | +93.30% |
+
+这些百分比是本批样本中位数的比值，不是置信区间。尤其原生并发、sync=false、流水线关闭的三轮为 124,195 / 80,063 / 152,917 ops/s，波动很大；Async 2 对应为 237,082 / 269,660 / 246,778，各轮都高于原生并发，但不能把 +98.70% 当成固定收益。原生并发开启流水线为 288,239 / 287,694 / 269,516，明显更稳定。
+
+相对 Async 1，Async 2 的无同步写中位数分别下降 14.19%/16.60%，Async 4 下降 60.30%/62.85%，Async 8 下降 79.28%/79.93%（依次为流水线关闭/开启）。4/8 worker 的全部无同步样本都低于相应单 worker，范围没有重叠。当前 1 KiB、batch=1、16 前台的负载未显示多 worker 的吞吐扩展性。
+
+同步写中，多 worker 相对 Async 1 的中位数只提高约 1.99%～4.46%，不是随线程数扩展。相对原生并发约 1.9～2.0 倍的主要证据指向 WAL 分组：原生约 8.1 请求/组，Async 1 已约 15.6～15.7，多 worker 约 15.8～15.9。不能把该优势归功于 memtable 多线程本身；sync=false 时原生并发关闭流水线也明显低于其串行参考组，原生并发并非在本负载下一定获益。
+
+### CPU 与调用延迟
+
+CPU 单位 μs/完成写，包含整个进程的前台、worker、flush/compaction、启动/关闭 CPU；每个指标各自取逐轮中位数，不是从其他指标的中位数反推。
+
+| sync | 流水线 | 原生串行 | 原生并发 | Async 1 | Async 2 | Async 4 | Async 8 |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| false | 关闭 | 48.15 | 65.58 | 38.61 | 45.53 | 61.42 | 102.48 |
+| false | 开启 | 42.52 | 39.74 | 35.90 | 44.69 | 61.24 | 100.94 |
+| true | 关闭 | 56.54 | 86.74 | 53.63 | 56.94 | 62.80 | 79.72 |
+| true | 开启 | 60.50 | 92.95 | 55.64 | 56.32 | 64.32 | 82.51 |
+
+API 操作耗时 P99，单位 μs，三轮各自 P99 的中位数：
+
+| sync | 流水线 | 原生串行 | 原生并发 | Async 1 | Async 2 | Async 4 | Async 8 |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| false | 关闭 | 335.99 | 674.50 | 300.65 | 377.92 | 521.23 | 569.87 |
+| false | 开启 | 341.73 | 336.21 | 273.01 | 379.61 | 522.23 | 568.02 |
+| true | 关闭 | 13776.39 | 13907.88 | 9324.90 | 9127.01 | 8659.78 | 8613.02 |
+| true | 开启 | 13908.71 | 13811.96 | 9332.05 | 9049.47 | 8865.52 | 8504.36 |
+
+原生 API 返回已完成 memtable 应用；async API 返回只代表 WAL 成功和任务已交接。上述 P99 比较的是各自 API 语义，不是相同 memtable 可见性延迟。此次没有运行 Get/读前等待负载。
+
+### 多 worker 的开销证据与归因边界
+
+以下固定 sync=false、流水线关闭，各指标分别取三轮中位数：
+
+| 指标 | Async 1 | Async 2 | Async 4 | Async 8 |
+| --- | ---: | ---: | ---: | ---: |
+| 领取范围数/lease | 32.225 | 1.000 | 1.000 | 1.000 |
+| 空队列探测/写 | 0.862 | 4.951 | 74.032 | 160.399 |
+| sleep-calls/千写 | 0.668 | 5.045 | 173.433 | 733.768 |
+| wake-calls/千写 | 0.816 | 3.465 | 76.585 | 129.548 |
+| 主动上下文切换/千写 | 108.016 | 275.068 | 990.932 | 1,778.843 |
+| 队列 CAS 重试/写 | 0.000 | 0.004 | 0.068 | 0.095 |
+| 应用开始前排队 μs | 9,941.449 | 5,354.031 | 35.864 | 15.221 |
+| stall.micros 秒 | 4.786 | 0.484 | 0.000 | 0.000 |
+
+4/8 worker 的全部 12 个无同步样本 stall.micros 均为零，不能用第 22.25 节串行 V2/V3 对照中的额外 L0/flush 背压解释这次明显下降。当前实现每个 WAL group 调用 WakeAll；Linux AsyncCommitEvent::NotifyAll 使用 FUTEX_WAKE_PRIVATE/INT_MAX。每个空闲 worker 先轮询至 50 μs，再尝试事件等待。线程增加时，实测空探测、等待协议和主动上下文切换均显著增加。sleep-calls 统计调用等待协议，可能因 epoch 变化立即返回，不等于实际睡眠次数；wake-calls 不是被唤醒线程数。
+
+代码也存在粒度差异：AsyncCommitExecutor::Run 中只有 workers_==1 才批量领取至 64 范围/约 64 KiB；多 worker 一次领取一个范围，本负载即一个 Put。每个 lease 后都进入 DB mutex 下检查 flush/trim 调度并做完成记账。这解释了为什么增加并发还会增加单位交接成本；不能仅根据 CAS 重试少就认为所有原子/缓存或锁成本可忽略。
+
+独立诊断在 sync=false、流水线关闭下对 Async 1、Async 8、原生并发各运行 30 秒，第 10～20 秒以 cpu-clock:u、99 Hz、DWARF 采样。三组分别 3,659/3,133/2,605 个样本，丢样均为零；profile 的吞吐没有混入正式结果。用户态自身样本中：
+
+- Async 1/8 的 TakeOrWait 分别为 5.06%/40.34%，worker sched_yield 分别约 0.87%/12.24%。TakeOrWait 同时含正常首任务领取、hazard/指针操作、空探测与等待协议，不能把其全部占比算成空转。
+- 原生并发的 AwaitState 约 35.24%，sched_yield 约 20.84%，后者主要在前台线程；这与其大量线程交接的表现一致，但尚未通过单因素消融唯一归因原生并发的全部退化。
+- 用户态样本不包含内核执行和 off-CPU 时间，百分比不能直接换算为吞吐损失。当前证据支持调度、轮询及逐任务管理开销显著增加，尚未量化广播唤醒、锁、hazard、分配等各自贡献。
+
+Async 4/8 的排队时间较短是在更低输入吞吐下测到的，不能据此证明同等输入速率下的读等待更短。当前结果仅支持：这组写负载下单 worker 吞吐最好；若要求多 worker，则 2 worker 的综合表现明显优于 4/8。其他 value/batch 大小、读写混合、CPU 预算或长期稳态需要另测。
+
+### 验证、复现与产物
+
+本轮性能测试前重新运行 async_commit_executor_test 312 项、async_commit_queue_test 7 项、db_bench_tool_test 5 项，共 324 项 Debug 测试通过。executor 正确性参数覆盖 worker=1/2/4，worker=8 另外通过预检、正式运行及排空核验；未把这些性能运行称为新增的 worker=8 正确性测试矩阵。正式期间产品源码/二进制哈希与开始时一致。此次只追加性能记录，没有实现或默认参数变更。
+
+产物位于 `build/async-concurrent-perf/`：
+
+- `formal-30s/`：results/analysis 的 JSON/CSV、verification.json、manifest.json、每次命令/OPTIONS/LOG、实际进程库映射、逐秒 OS/线程 CPU、GNU time、五秒进度和 source snapshot。`comparison.png`/`comparison.svg` 的误差线是三次 min/max，不是置信区间。
+- `profile/`：三组原始 perf 数据、self/children/thread-self 报告、线程调度快照、condensed-profiles.json 及 verification.json。首个报告核验器曾错误要求 children 报告含 Overhead 表头，实际为 Children/Self；修正后验证并复用有效的首组数据，再继续余下两组，原始日志保留。
+- `preflight/`、`tests.json` 和测试日志；`compare.py`、`analyze.py`、`plot.py`、`profile.py`、`verify_profiles.py`、`write_report.py` 保存复现与汇总逻辑。
+
+重跑矩阵（输出目录需为新目录）：
+
+```sh
+python3 build/async-concurrent-perf/compare.py --duration=30 --rounds=3 --out=build/async-concurrent-perf/repeat-30s
+python3 build/async-concurrent-perf/analyze.py build/async-concurrent-perf/repeat-30s
+```
+
+## 23. Strong visibility 模式
+
+### 23.1 目标与配置
+
+新增不可动态修改的 DBOptions::async_commit_strong_visibility，默认 false。
+开启时要求 enable_async_commit=true 且 async_commit_memtable_threads>0；
+不隐式开启 async commit 或创建线程池。不满足条件时 Open 返回 InvalidArgument。
+支持 enable_pipelined_write 开关、WriteOptions::sync 开关，以及现有的单/多 worker
+配置；多 worker 继续要求 allow_concurrent_memtable_write=true。
+该模式复用 V3 的 WAL 与 memtable 分离架构，改变成功返回的可见性条件。
+
+### 23.2 写入、发布与返回
+
+leader 完成 WAL（sync=true 时包括所需同步）后，将已拥有数据的任务发布到无锁队列，
+唤醒 worker 和 followers，并释放 WAL 队列，让后续 WAL 继续推进。
+leader 和 followers 都在离开 WAL 队列后等待自己的结束 sequence 被发布，才返回 OK；
+等待时不得持有 WAL 队列领导权、DB mutex 或阻止 worker 完成的锁。
+
+发布仍使用现有的连续完成前缀：只有某个 group 及其之前的 group 都完成，才能推进
+versions_->LastSequence()。并发 worker 可以乱序完成插入，但不能跳过未完成的前驱发布。
+这与原生有序写在并发 memtable 模式下的 group 完成屏障具有相同的可见性约束，
+保证新读视图和 snapshot 不会因后续补入较小 sequence 的写而改变。
+一个调用者自己的 range 完成并不足以返回成功，必须等公开发布水位覆盖它。
+空 batch/LogData 不消费 sequence，也不能因 sequence 为零或未初始化而发生无限等待；
+这类调用至少等待入组时已有的分配水位，允许保守等待所在 group 的发布水位。
+
+WAL、预处理或校验失败直接返回相应错误。等待期间遇到 memtable 全局错误或关闭，
+唤醒等待者并返回相应错误；不得把 WAL 成功当作 strong visibility 写成功。
+WriteOptions::sync 的持久性语义保持不变，strong visibility 本身不额外执行 WAL sync。
+Close 继续要求用户 API 调用已静止，不新增并发 Close/Write 的使用约定。
+
+### 23.3 读操作
+
+strong visibility 开启时，成功写入已经发布，不再建立线程本地的读前 sequence 依赖。
+所有用户读入口的 PrepareAsyncCommitRead 直接跳过 async commit 的等待逻辑，
+Get、MultiGet、迭代器和新 snapshot 使用正常的已发布视图。
+正在执行但尚未返回的写不会让读等待其分配水位；显式旧 snapshot 和既有迭代器继续
+保持原有历史视图。关闭该模式时，保留现有线程 sequence 上下文和读前等待行为。
+
+### 23.4 实施与验证
+
+1. 补齐 DBOptions/ImmutableDBOptions、配置解析与回写、OPTIONS/日志、db_bench 参数
+   和 Open 配置校验，并记录默认关闭及依赖条件。db_bench 在 strong 模式下将 API
+   返回摘要标为 published-ack，延迟包含发布等待；原模式继续使用 wal-ack。
+2. 在公共写返回路径添加 sequence 发布等待，覆盖 leader/follower；复用现有
+   async_commit_mutex_/async_commit_cv_ 的发布、错误和关闭通知，先释放 WAL 队列再等待。
+3. strong visibility 下跳过线程依赖分配/更新和读前等待，保持默认模式原有行为。
+4. 先添加能够在当前实现上失败的测试，再实现。正确性矩阵覆盖流水线、sync、
+   worker=1/2/4；检查 leader/follower 返回前已发布、下一组 WAL 可继续、跨线程可见、
+   group/range 乱序不能提前返回、读不等待正在执行的写、错误唤醒、空 batch/LogData、
+   配置持久化与不可动态修改。运行现有 async commit、队列及相关写入/配置回归测试。
+
+### 23.5 实现记录
+
+`AsyncWriteImpl` 的共同返回路径根据选项选择行为：strong 模式调用
+`WaitForAsyncCommitSequence(writer.async_end_sequence, ReadOptions())`，
+原模式继续更新线程本地 required_sequence。leader 在线程池 Submit/Wake 和 WAL
+队列退出之后才执行共同返回路径；followers 收到 WAL 完成通知后走同一个等待入口。
+等待复用原读前等待的条件变量、连续发布水位、错误及关闭检查，不另建完成队列。
+空 batch/LogData 的等待目标取所在 group 的结束水位，避免漏等前驱或消费额外 sequence。
+
+strong 模式不为调用线程创建 AsyncCommitThreadContext；PrepareAsyncCommitRead
+在查询 TLS 之前直接返回 OK。配置接入 DBOptions、ImmutableDBOptions、配置解析和
+回写、OPTIONS 文件、日志以及 db_bench；Open 拒绝缺少 async 或线程池的组合，
+SetDBOptions 拒绝动态修改该选项。
+
+新增 7 组参数化线程池测试，每组 12 个配置（worker=1/2/4 × pipeline × sync），
+合计 84 个 gtest 项；跨 group 乱序完成、后组错误唤醒前组两个场景只在 worker>1
+时执行。另有配置 round-trip/校验测试和 db_bench 参数、有效 OPTIONS、摘要名称测试。
+先验证了未注册配置、提前成功返回、漏等空 batch 前驱、丢失 memtable 错误和
+strong 摘要仍标为 wal-ack 的失败，再验证修正结果。
+
+### 23.6 本轮验证结果（2026-11-06）
+
+| 测试程序 | Debug | ASan + UBSan | TSan |
+| --- | ---: | ---: | ---: |
+| async_commit_executor_test | 396 | 396 | 396 |
+| async_commit_test | 146 | 146 | 146 |
+| async_commit_queue_test | 7 | 7 | 7 |
+| db_bench_tool_test | 6 | 未运行 | 未运行 |
+| options_settable_test | 3 | 未运行 | 未运行 |
+| db_write_test | 27 | 未运行 | 未运行 |
+| db_memtable_test | 4 | 未运行 | 未运行 |
+| db_range_del_test | 42 | 未运行 | 未运行 |
+| 合计通过 | 631 | 549 | 549 |
+
+各程序均完整运行其测试集，退出码为零，无失败。ASan 开启泄漏检测并同时启用 UBSan，
+TSan 使用当前 WSL 环境已有的 `setarch x86_64 -R` 运行方式，未使用 sanitizer suppressions。
+另用本轮重新构建的 Debug db_bench 做两个命令行功能检查：4 个前台线程、2 个 worker，
+pipeline/sync 分别为 0/0 和 1/1；有效 OPTIONS 确认 strong=true，输出 published-ack，
+最终 pending groups/bytes 和 terminal error 均为零。这些短运行不作为性能数据。
+
+验证产物位于 `build/async-strong-visibility/`：manifest.json 保存产品源码哈希和运行环境；
+verification-{debug,asan,tsan}.json 保存退出码、测试计数、命令、二进制与动态库哈希；
+同目录保存逐程序日志、gtest JSON、失败验证日志、smoke.json 及实际 OPTIONS。
+核验各测试程序运行的动态库哈希一致，验证结束时产品源码哈希与记录一致。
+正式性能测试在用户确认其他负载已停之后另行开始。
+
+新增线程池测试可单独运行：
+
+```sh
+./build/async_commit_executor_test --gtest_filter='*StrongVisibility*'
+```
+
+## 23.7 Strong visibility 性能对比
+
+### 条件、配置和计数核验
+
+本轮在用户确认可以开始、其他负载已停后运行。重新构建当前工作区 Release（-O3 -DNDEBUG，无 sanitizer），八种模式使用同一个可执行文件及动态库。原生指本工作区关闭 enable_async_commit 的原生写入路径；Weak 指 strong_visibility=false 的当前 V3，Strong 指 strong_visibility=true。不混入第 22 节的历史样本。
+
+8 模式 × sync/pipeline 四个组合 × 3 轮，共 96 个正式样本，每次 30 秒，每轮使用固定种子打乱顺序。另有 32 个 2 秒预检，全部排除出统计。16 个前台、batch=1、key=16 B、value=1 KiB、1M key 空间、seed=1000、fillrandom 直接 Put（含覆盖），每次全新 DB。WAL 开启、use_fsync=true、SkipListFactory、无压缩；64 MiB memtable、max_write_buffer_number=2、max_background_jobs=2，保留自动 flush/compaction 和 L0 slowdown/stop=20/36。等待参数仍为 slow yield 3 μs、max yield 100 μs、自适应开启，worker 空闲阈值 50 μs。
+
+原生串行、Weak 1、Strong 1 设置 allow_concurrent_memtable_write=false；原生并发、Weak/Strong 2/4 设置 true。数字是独立 memtable worker 数；原生使用前台写线程。异步模式在 16 个前台之外增加 worker，因此比较固定前台负载下的实现配置，同时报告整个进程 CPU；不是固定总线程数或 CPU 配额的扩展性实验。未设置 affinity、未清缓存，正式期间无并行基准、构建或测试。
+
+共完成 212,813,764 次写。逐次核验实际进程可执行文件/映射动态库、有效 OPTIONS、sync 对应 WAL 同步计数，以及完成操作数=write.self+write.other=DB_WRITE 直方图计数；异步 submitted/drained groups 相等，最终 pending groups/bytes/error 均为零。最终排空最大 18.605 ms，计入吞吐分母。产品源码及二进制哈希在全程一致。
+
+### 完成吞吐
+
+单位 ops/s，逐配置三轮中位数。吞吐含最后的内部 memtable 排空。图中的误差线为三次 min/max，不是置信区间。
+
+| sync | 流水线 | 原生串行 | 原生并发 | Weak 1 | Weak 2 | Weak 4 | Strong 1 | Strong 2 | Strong 4 |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| false | 关闭 | 262,741 | 120,069 | 301,592 | 264,909 | 113,201 | 7,088 | 24,531 | 13,715 |
+| false | 开启 | 283,110 | 243,530 | 275,470 | 263,042 | 115,473 | 7,658 | 23,602 | 13,289 |
+| true | 关闭 | 1,763 | 1,703 | 3,280 | 3,376 | 3,340 | 1,728 | 1,702 | 1,770 |
+| true | 开启 | 1,788 | 1,724 | 3,339 | 3,324 | 3,280 | 1,713 | 1,744 | 1,790 |
+
+Strong 相对相应原生配置的中位数变化（Strong 1 对原生串行，Strong 2/4 对原生并发）：
+
+| sync | 流水线 | Strong 1 | Strong 2 | Strong 4 |
+| --- | --- | ---: | ---: | ---: |
+| false | 关闭 | -97.30% | -79.57% | -88.58% |
+| false | 开启 | -97.30% | -90.31% | -94.54% |
+| true | 关闭 | -1.99% | -0.06% | +3.93% |
+| true | 开启 | -4.19% | +1.16% | +3.83% |
+
+Strong 相对相同 worker 数 Weak 的中位数变化：
+
+| sync | 流水线 | 1 worker | 2 workers | 4 workers |
+| --- | --- | ---: | ---: | ---: |
+| false | 关闭 | -97.65% | -90.74% | -87.88% |
+| false | 开启 | -97.22% | -91.03% | -88.49% |
+| true | 关闭 | -47.32% | -49.59% | -47.01% |
+| true | 开启 | -48.70% | -47.53% | -45.43% |
+
+### 整个进程 CPU（μs/完成写）
+
+| sync | 流水线 | 原生串行 | 原生并发 | Weak 1 | Weak 2 | Weak 4 | Strong 1 | Strong 2 | Strong 4 |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| false | 关闭 | 46.23 | 68.04 | 36.42 | 43.04 | 61.37 | 193.34 | 67.18 | 115.43 |
+| false | 开启 | 39.15 | 46.87 | 39.24 | 43.46 | 60.86 | 177.83 | 69.27 | 118.97 |
+| true | 关闭 | 57.58 | 89.55 | 51.82 | 55.31 | 66.28 | 85.32 | 92.01 | 108.30 |
+| true | 开启 | 55.53 | 91.69 | 50.87 | 58.68 | 67.79 | 84.01 | 93.93 | 104.91 |
+
+### API 返回 P99（ms）
+
+| sync | 流水线 | 原生串行 | 原生并发 | Weak 1 | Weak 2 | Weak 4 | Strong 1 | Strong 2 | Strong 4 |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| false | 关闭 | 0.323 | 0.683 | 0.287 | 0.367 | 0.522 | 2.892 | 1.235 | 1.857 |
+| false | 开启 | 0.309 | 0.456 | 0.323 | 0.367 | 0.516 | 2.890 | 1.262 | 1.872 |
+| true | 关闭 | 13.715 | 13.761 | 9.145 | 8.919 | 8.914 | 13.688 | 13.865 | 13.746 |
+| true | 开启 | 13.455 | 13.663 | 9.265 | 9.147 | 8.505 | 13.780 | 13.819 | 13.689 |
+
+### 平均 WAL group 大小（请求/组）
+
+| sync | 流水线 | 原生串行 | 原生并发 | Weak 1 | Weak 2 | Weak 4 | Strong 1 | Strong 2 | Strong 4 |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| false | 关闭 | 7.34 | 9.06 | 8.34 | 7.11 | 3.89 | 1.00 | 1.01 | 1.01 |
+| false | 开启 | 3.90 | 4.22 | 7.92 | 7.07 | 3.78 | 1.00 | 1.01 | 1.00 |
+| true | 关闭 | 8.31 | 8.21 | 15.66 | 15.69 | 15.90 | 8.00 | 8.10 | 8.45 |
+| true | 开启 | 8.10 | 8.14 | 15.66 | 15.82 | 15.92 | 8.00 | 8.12 | 8.43 |
+
+### 主动上下文切换（次/千次完成写）
+
+| sync | 流水线 | 原生串行 | 原生并发 | Weak 1 | Weak 2 | Weak 4 | Strong 1 | Strong 2 | Strong 4 |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| false | 关闭 | 98.9 | 497.8 | 111.0 | 256.3 | 982.4 | 16,821.2 | 5,167.2 | 9,370.8 |
+| false | 开启 | 57.7 | 86.8 | 123.8 | 267.1 | 995.5 | 16,823.2 | 5,132.2 | 9,398.9 |
+| true | 关闭 | 1,282.1 | 2,193.2 | 1,267.8 | 1,421.7 | 1,478.0 | 2,474.7 | 2,572.5 | 2,700.2 |
+| true | 开启 | 1,316.6 | 2,192.7 | 1,266.2 | 1,418.2 | 1,483.8 | 2,480.0 | 2,573.1 | 2,698.1 |
+
+原生和 Strong 的 API 延迟均包含 memtable 发布等待；Weak 的 API 延迟是 WAL/安全入队确认，尚未计入同线程后续读可能发生的等待。因此不能将 Weak 的低返回延迟当成相同可见性下的读写延迟优势。本轮是纯 Put，没有测读写混合或首次读的延迟。CPU 包括前台、worker、flush/compaction、启动与关闭；各指标分别取逐轮中位数。
+
+百分比是中位数比值；三轮范围见 comparison.png/SVG，逐次数据见 results/enriched-results。分组、CPU、上下文切换与 stall 用于解释观察，未做单因素消融时不据此唯一归因。
+
+### 验证和复现
+
+本轮产品实现此前通过 Debug 631 项、ASan/UBSan 549 项、TSan 549 项（第 23.6 节）。性能样本只使用随后重新构建的 Release；所有构建、功能测试和预检在正式采集开始前完成。
+
+产物：build/async-strong-perf/formal-30s/ 下保存 manifest/source snapshot、原始命令/日志/OPTIONS/库映射、逐秒进程及线程 CPU、GNU time、五秒进度、results/analysis/enriched-results 的 JSON/CSV、verification.json、comparison.png/SVG 和 report.md；preflight/ 单独保存短运行。compare.py、analyze.py、plot.py 和 write_report.py 保存复现与汇总逻辑。
+
+```sh
+python3 build/async-strong-perf/compare.py --duration=30 --rounds=3 --out=build/async-strong-perf/repeat-30s
+python3 build/async-strong-perf/analyze.py build/async-strong-perf/repeat-30s
+uv run --with matplotlib python build/async-strong-perf/plot.py build/async-strong-perf/repeat-30s
+```
+
+## 23.8 Strong visibility 等待开销定位
+
+### 正式结果与稳定性
+
+三轮结果显示：Strong 1 的无同步完成吞吐只有原生串行约 2.7%，两个流水线设置下均如此；无同步时 Strong 2 比 Strong 1 高，但仍显著低于相应原生和 Weak。同步写中 Strong 接近原生，约为相同 worker 数 Weak 的一半。这里是当前等待实现的结果，不能由此推断强可见性语义本身必须牺牲这些吞吐。
+
+非流水线、sync=false 的逐次吞吐为：原生串行 262,741 / 239,359 / 267,546；Weak 1 为 301,592 / 313,763 / 285,213；Strong 1 为 7,069 / 7,088 / 7,551；Strong 2 为 24,309 / 25,142 / 24,531 ops/s。Strong 的大幅退化三轮均可复现，范围与原生/Weak 不重叠。
+
+### 等待、CPU 与分组证据
+
+以下均为 sync=false、流水线关闭的逐轮指标中位数；主动上下文切换包括整个进程。application 计时包含插入和目标调度，排除后续 Complete/回收/通知，不能当作完整 memtable 阶段延迟。
+
+| 模式 | 完成 ops/s | CPU μs/写 | 平均使用 CPU 核 | 主动切换 次/写 | WAL 请求/组 | application μs/写 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 原生串行 | 262,741 | 46.23 | 12.02 | 0.099 | 7.34 | — |
+| Weak 1 | 301,592 | 36.42 | 11.12 | 0.111 | 8.34 | 2.17 |
+| Strong 1 | 7,088 | 193.34 | 1.37 | 16.821 | 1.00 | 2.85 |
+| Strong 2 | 24,531 | 67.18 | 1.65 | 5.167 | 1.01 | 3.10 |
+| Strong 4 | 13,715 | 115.43 | 1.59 | 9.371 | 1.01 | 4.32 |
+
+1. 18 个 Strong 无同步正式样本的 stall.micros 全部为零，不能套用早先 V3/V2 的 L0 写停顿诊断。Strong 1 的 worker sleep 尝试只有约 0.040 次/千次写，空队列探测约 0.016 次/写；没有证据支持将主要损失归因于 50 μs 空闲阈值。
+2. Strong 1 每写约 16.82 次主动切换，原生串行约 0.099、Weak 1 约 0.111。Strong 1 总 CPU 使用仅约 1.37 核，远低于对应原生串行/Weak 1 实际使用的约 11～12 核，额外时间大量消耗在阻塞和唤醒中。Strong 1 的 system CPU 约 171.44 μs/写，原生串行约 22.99、Weak 1 约 15.92。
+3. Strong 1 每次 lease 仍平均领取约 15.92 个请求，application 约 2.85 μs/写，接近 Weak 1 的 2.17 μs/写；但每个 WAL group 约只有一个请求，逐组 Complete 在 application 计时之外反复通知。WAL 分组退化与完成通知成本应分别考虑。
+4. sync=true 时，Strong 的 WAL group 大小约回到 8，而 Weak 约 16。同步服务成本相近、分组大小不同，与 Strong 同步吞吐接近原生、约为 Weak 一半的表现一致；尚未做分组和通知的独立消融，不能把全部差异唯一分摊给其中一个因素。
+
+### 独立采样与线程栈
+
+正式矩阵结束后，另对原生串行、Weak 1、Strong 1、Strong 2 各运行 30 秒，在第 10～20 秒以 cpu-clock:u、99 Hz、DWARF 8192 采样，并保存 100 次 /proc 线程状态、schedstat/wchan/futex syscall 观察；采样窗口后获取一次 GDB 全线程调用栈。四组分别得到 3,323 / 3,578 / 122 / 306 个用户态样本，丢样均为零。四组的命令、OPTIONS、计数、排空和实际动态库均单独核验，诊断吞吐不计入第 23.7 节。
+
+用户态样本没有覆盖内核和 off-CPU 时间，Strong 用户态样本数也较少，因此不以其百分比量化全部吞吐损失。线程栈提供了直接的执行位置证据：
+
+- Strong 1：16 个写调用线程都在 WaitForAsyncCommitSequence → pthread_cond_wait，条件变量地址相同；唯一 memtable worker 在 AsyncCommitExecutor::Run → pthread_cond_broadcast → futex_wake，广播目标就是同一个条件变量。
+- Strong 2：同样有 16 个发布等待者；两个 memtable worker 都位于同一个 pthread_cond_broadcast，其中一个在 futex_wake，另一个在 __condvar_quiesce_and_switch_g1 → futex_wait，等待条件变量内部的组切换。
+
+源码路径与观察相符：WaitForAsyncCommitSequence 使用全局 async_commit_mutex_/async_commit_cv_；AsyncCommitExecutor::Complete 对每个 group 结束都调用全局 notify_all。一个小组发布后，尚未达到目标的写线程也会被唤醒、重新检查并等待；这些写线程与 worker、资源预留和任务注册复用同一全局同步对象。原生则通过 WriteThread 的组完成通知释放相应写组。证据支持全局发布广播及其等待竞争是当前 Strong 无同步写的重要瓶颈，不能仅以 memtable 插入 CPU 优化来解决。
+
+后续优化方向是保留连续发布水位，按已发布 group 唤醒对应调用者，并考虑合并一个 lease 内的发布/通知；错误仍须唤醒全部受影响等待者。此轮保持产品代码和参数不变，只记录测量及诊断。
+
+诊断产物位于 build/async-strong-perf/profile/：原始 perf 数据、self/children/thread-self 报告、GDB threads.txt、逐线程快照、thread-state-analysis.json、condensed-profiles.json 和 verification.json。/proc 的角色分类按线程 comm 粗分，非线程池类别可能包含未命名辅助线程；观察计数不是精确阻塞时长。
