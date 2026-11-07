@@ -94,6 +94,331 @@ class AsyncCommitExecutorTest : public DBTestBase,
   }
 };
 
+// A reader with no preceding write must still wait for writes allocated before
+// its entry. Keeping the old thread-local-only target makes this fail.
+TEST_P(AsyncCommitExecutorTest, ReadWaitsForOtherThreadsAllocatedSequence) {
+  Reopen(PoolOptions());
+  PoolEvent applying, release;
+  auto* sp = SyncPoint::GetInstance();
+  sp->SetCallBack("DBImpl::AsyncWriteImpl:BeforeApply", [&](void*) {
+    applying.Set();
+    EXPECT_TRUE(release.Wait());
+  });
+  sp->EnableProcessing();
+  std::thread writer(
+      [&] { EXPECT_OK(db_->Put(Writes(), "pending", "value")); });
+  EXPECT_TRUE(applying.Wait());
+  writer.join();
+  ReadOptions read;
+  read.deadline = std::chrono::microseconds(env_->NowMicros() + 5000);
+  std::string value;
+  EXPECT_TRUE(db_->Get(read, "pending", &value).IsTimedOut());
+  release.Set();
+  EXPECT_OK(dbfull()->WaitForAsyncCommit());
+  sp->DisableProcessing();
+  sp->ClearAllCallBacks();
+  EXPECT_EQ("value", Get("pending"));
+}
+
+// Capturing A only after WAL success would let this reader miss an in-flight
+// allocation. A WAL failure must instead wake it with the terminal error.
+TEST_P(AsyncCommitExecutorTest, ReadCapturesSequenceBeforeWALCompletes) {
+  Reopen(PoolOptions());
+  PoolEvent allocated, release;
+  auto* sp = SyncPoint::GetInstance();
+  sp->SetCallBack("DBImpl::AsyncWriteImpl:SequenceAllocated", [&](void*) {
+    allocated.Set();
+    EXPECT_TRUE(release.Wait());
+  });
+  sp->SetCallBack("DBImpl::AsyncWriteImpl:WALStatus", [&](void* arg) {
+    *static_cast<IOStatus*>(arg) = IOStatus::IOError("injected WAL failure");
+  });
+  sp->EnableProcessing();
+  std::thread writer(
+      [&] { EXPECT_TRUE(db_->Put(Writes(), "pending", "value").IsIOError()); });
+  EXPECT_TRUE(allocated.Wait());
+  ReadOptions read;
+  read.deadline = std::chrono::microseconds(env_->NowMicros() + 5000);
+  std::string value;
+  EXPECT_TRUE(db_->Get(read, "pending", &value).IsTimedOut());
+  release.Set();
+  writer.join();
+  EXPECT_TRUE(db_->Get(ReadOptions(), "pending", &value).IsIOError());
+  sp->DisableProcessing();
+  sp->ClearAllCallBacks();
+}
+
+// Reading A again after the entry hook would incorrectly wait for sequence 2.
+TEST_P(AsyncCommitExecutorTest, ReadTargetDoesNotChaseLaterAllocations) {
+  Reopen(PoolOptions());
+  PoolEvent first, second, release_first, release_second, captured, resume;
+  auto* sp = SyncPoint::GetInstance();
+  sp->SetCallBack("DBImpl::AsyncWriteImpl:BeforeApply", [&](void* arg) {
+    if (WriteBatchInternal::Sequence(static_cast<WriteBatch*>(arg)) == 1) {
+      first.Set();
+      EXPECT_TRUE(release_first.Wait());
+    } else {
+      second.Set();
+      EXPECT_TRUE(release_second.Wait());
+    }
+  });
+  sp->SetCallBack("DBImpl::PrepareAsyncCommitRead:Wait", [&](void* arg) {
+    EXPECT_EQ(1U, *static_cast<SequenceNumber*>(arg));
+    captured.Set();
+    EXPECT_TRUE(resume.Wait());
+  });
+  sp->EnableProcessing();
+  EXPECT_OK(db_->Put(Writes(), "first", "one"));
+  EXPECT_TRUE(first.Wait());
+  std::thread reader([&] {
+    ReadOptions read;
+    read.deadline = std::chrono::microseconds(env_->NowMicros() + 5000000);
+    std::string value;
+    EXPECT_OK(db_->Get(read, "first", &value));
+    EXPECT_EQ("one", value);
+  });
+  EXPECT_TRUE(captured.Wait());
+  EXPECT_OK(db_->Put(Writes(), "second", "two"));
+  release_first.Set();
+  EXPECT_TRUE(second.Wait());
+  // With multiple workers the second task may start before P reaches 1.
+  PoolEvent published;
+  sp->SetCallBack("DBImpl::NotifyAsyncCommitPublication:BeforeSlotLock",
+                  [&](void*) { published.Set(); });
+  if (db_->GetLatestSequenceNumber() < 1) {
+    EXPECT_TRUE(published.Wait());
+  }
+  resume.Set();
+  reader.join();
+  release_second.Set();
+  EXPECT_OK(dbfull()->WaitForAsyncCommit());
+  sp->DisableProcessing();
+  sp->ClearAllCallBacks();
+}
+
+// Publishing between a reader's unlocked check and its slot lock must not
+// strand it, even when the publisher sees no registered waiters.
+TEST_P(AsyncCommitExecutorTest, PublicationBeforeSlotLockIsNotLost) {
+  Options options = PoolOptions();
+  options.async_commit_wait_spin_us = 0;
+  options.async_commit_wait_yield_us = 0;
+  Reopen(options);
+  PoolEvent applying, release, before_lock, resume;
+  auto* sp = SyncPoint::GetInstance();
+  sp->SetCallBack("DBImpl::AsyncWriteImpl:BeforeApply", [&](void*) {
+    applying.Set();
+    EXPECT_TRUE(release.Wait());
+  });
+  sp->SetCallBack("DBImpl::WaitForAsyncCommitSequence:BeforeSlotLock",
+                  [&](void*) {
+                    before_lock.Set();
+                    EXPECT_TRUE(resume.Wait());
+                  });
+  sp->EnableProcessing();
+  EXPECT_OK(db_->Put(Writes(), "key", "value"));
+  EXPECT_TRUE(applying.Wait());
+  std::thread reader([&] {
+    ReadOptions read;
+    read.deadline = std::chrono::microseconds(env_->NowMicros() + 5000000);
+    std::string value;
+    EXPECT_OK(db_->Get(read, "key", &value));
+    EXPECT_EQ("value", value);
+  });
+  EXPECT_TRUE(before_lock.Wait());
+  release.Set();
+  EXPECT_OK(dbfull()->WaitForAsyncCommit());
+  resume.Set();
+  reader.join();
+  sp->DisableProcessing();
+  sp->ClearAllCallBacks();
+}
+
+// The publisher must synchronize with the slot mutex after setting P. Merely
+// loading a waiter count without a handshake loses this notification.
+TEST_P(AsyncCommitExecutorTest, PublicationBetweenPredicateAndSleepIsNotLost) {
+  Options options = PoolOptions();
+  options.async_commit_wait_spin_us = 0;
+  options.async_commit_wait_yield_us = 0;
+  Reopen(options);
+  PoolEvent applying, release, before_wait, resume, notifying;
+  auto* sp = SyncPoint::GetInstance();
+  sp->SetCallBack("DBImpl::AsyncWriteImpl:BeforeApply", [&](void*) {
+    applying.Set();
+    EXPECT_TRUE(release.Wait());
+  });
+  sp->SetCallBack("DBImpl::WaitForAsyncCommitSequence:BeforeWait", [&](void*) {
+    before_wait.Set();
+    EXPECT_TRUE(resume.Wait());
+  });
+  sp->SetCallBack("DBImpl::NotifyAsyncCommitPublication:BeforeSlotLock",
+                  [&](void*) { notifying.Set(); });
+  sp->EnableProcessing();
+  EXPECT_OK(db_->Put(Writes(), "key", "value"));
+  EXPECT_TRUE(applying.Wait());
+  std::thread reader([&] {
+    ReadOptions read;
+    read.deadline = std::chrono::microseconds(env_->NowMicros() + 5000000);
+    std::string value;
+    EXPECT_OK(db_->Get(read, "key", &value));
+    EXPECT_EQ("value", value);
+  });
+  EXPECT_TRUE(before_wait.Wait());
+  release.Set();
+  EXPECT_TRUE(notifying.Wait());
+  resume.Set();
+  reader.join();
+  EXPECT_OK(dbfull()->WaitForAsyncCommit());
+  sp->DisableProcessing();
+  sp->ClearAllCallBacks();
+}
+
+TEST_P(AsyncCommitExecutorTest, SpinAndYieldCanFinishWithoutBlocking) {
+  for (bool spin : {true, false}) {
+    Options options = PoolOptions();
+    options.async_commit_wait_spin_us = spin ? 10000000 : 0;
+    options.async_commit_wait_yield_us = spin ? 0 : 10000000;
+    Reopen(options);
+    PoolEvent applying, release;
+    std::atomic<unsigned> busy{0}, blocked{0};
+    auto* sp = SyncPoint::GetInstance();
+    sp->SetCallBack("DBImpl::AsyncWriteImpl:BeforeApply", [&](void*) {
+      applying.Set();
+      EXPECT_TRUE(release.Wait());
+    });
+    sp->SetCallBack(spin ? "DBImpl::WaitForAsyncCommitSequence:Spin"
+                         : "DBImpl::WaitForAsyncCommitSequence:Yield",
+                    [&](void*) {
+                      ++busy;
+                      release.Set();
+                    });
+    sp->SetCallBack("DBImpl::WaitForAsyncCommitSequence:BeforeWait",
+                    [&](void*) { ++blocked; });
+    sp->EnableProcessing();
+    EXPECT_OK(db_->Put(Writes(), "key", "value"));
+    EXPECT_TRUE(applying.Wait());
+    ReadOptions read;
+    read.deadline = std::chrono::microseconds(env_->NowMicros() + 5000000);
+    std::string value;
+    EXPECT_OK(db_->Get(read, "key", &value));
+    EXPECT_EQ("value", value);
+    EXPECT_GT(busy.load(), 0U);
+    EXPECT_EQ(0U, blocked.load());
+    release.Set();
+    EXPECT_OK(dbfull()->WaitForAsyncCommit());
+    sp->DisableProcessing();
+    sp->ClearAllCallBacks();
+  }
+}
+
+TEST_P(AsyncCommitExecutorTest, BusyPublicationWaitHonorsDeadline) {
+  for (bool spin : {true, false}) {
+    Options options = PoolOptions();
+    options.async_commit_wait_spin_us = spin ? 10000000 : 0;
+    options.async_commit_wait_yield_us = spin ? 0 : 10000000;
+    Reopen(options);
+    PoolEvent applying, release;
+    std::atomic<unsigned> blocked{0};
+    auto* sp = SyncPoint::GetInstance();
+    sp->SetCallBack("DBImpl::AsyncWriteImpl:BeforeApply", [&](void*) {
+      applying.Set();
+      EXPECT_TRUE(release.Wait());
+    });
+    sp->SetCallBack("DBImpl::WaitForAsyncCommitSequence:BeforeWait",
+                    [&](void*) { ++blocked; });
+    sp->EnableProcessing();
+    EXPECT_OK(db_->Put(Writes(), "key", "value"));
+    EXPECT_TRUE(applying.Wait());
+    ReadOptions read;
+    read.deadline = std::chrono::microseconds(env_->NowMicros() + 5000);
+    std::string value;
+    EXPECT_TRUE(db_->Get(read, "key", &value).IsTimedOut());
+    EXPECT_EQ(0U, blocked.load());
+    release.Set();
+    EXPECT_OK(dbfull()->WaitForAsyncCommit());
+    sp->DisableProcessing();
+    sp->ClearAllCallBacks();
+  }
+}
+
+// Targets 1..6 cover separate slots and collisions. Replacing notify_all with
+// notify_one, waking only P % N, or failing to broadcast errors strands
+// readers.
+TEST_P(AsyncCommitExecutorTest, PublicationAndErrorsWakeAllCoveredSlots) {
+  for (uint32_t slots : {1U, 3U, 32U, 1024U}) {
+    for (bool fail : {false, true}) {
+      Options options = PoolOptions();
+      options.async_commit_wait_slots = slots;
+      options.async_commit_wait_spin_us = 0;
+      options.async_commit_wait_yield_us = 0;
+      DestroyAndReopen(options);
+      PoolEvent applying, release;
+      std::vector<std::unique_ptr<PoolEvent>> waiting;
+      for (int i = 0; i < 6; ++i) waiting.emplace_back(new PoolEvent);
+      static thread_local size_t reader_id;
+      static thread_local bool fail_range;
+      auto* sp = SyncPoint::GetInstance();
+      sp->SetCallBack("DBImpl::AsyncWriteImpl:BeforeApply", [&](void* arg) {
+        fail_range =
+            WriteBatchInternal::Sequence(static_cast<WriteBatch*>(arg)) == 1;
+        if (fail_range) {
+          applying.Set();
+          EXPECT_TRUE(release.Wait());
+        }
+      });
+      if (fail) {
+        sp->SetCallBack("DBImpl::AsyncWriteImpl:ApplyStatus", [&](void* arg) {
+          if (fail_range)
+            *static_cast<Status*>(arg) = Status::IOError("publication failed");
+        });
+      }
+      sp->SetCallBack("DBImpl::WaitForAsyncCommitSequence:BeforeWait",
+                      [&](void* arg) {
+                        const uint32_t by_three[] = {1, 2, 0, 1, 2, 0};
+                        const uint32_t expected =
+                            slots == 1   ? 0
+                            : slots == 3 ? by_three[reader_id]
+                                         : static_cast<uint32_t>(reader_id + 1);
+                        EXPECT_EQ(expected, *static_cast<uint32_t*>(arg));
+                        waiting[reader_id]->Set();
+                      });
+      sp->EnableProcessing();
+      std::vector<std::thread> readers;
+      for (size_t i = 0; i < 6; ++i) {
+        EXPECT_OK(db_->Put(Writes(), std::to_string(i), "value"));
+        if (i == 0) {
+          EXPECT_TRUE(applying.Wait());
+        }
+        readers.emplace_back([&, i] {
+          reader_id = i;
+          ReadOptions read;
+          read.deadline =
+              std::chrono::microseconds(env_->NowMicros() + 5000000);
+          std::string value;
+          Status status = db_->Get(read, std::to_string(i), &value);
+          if (fail) {
+            EXPECT_TRUE(status.IsIOError());
+          } else {
+            EXPECT_OK(status);
+            EXPECT_EQ("value", value);
+          }
+        });
+        EXPECT_TRUE(waiting[i]->Wait());
+      }
+      release.Set();
+      for (auto& reader : readers) reader.join();
+      Status drained = dbfull()->WaitForAsyncCommit();
+      if (fail) {
+        EXPECT_TRUE(drained.IsIOError());
+      } else {
+        EXPECT_OK(drained);
+      }
+      sp->DisableProcessing();
+      sp->ClearAllCallBacks();
+      ExpectDrained();
+    }
+  }
+}
+
 TEST_P(AsyncCommitExecutorTest, StrongVisibilityWaitsForLeaderAndFollowers) {
   Options options = PoolOptions();
   ASSERT_OK(EnableStrongVisibility(&options));

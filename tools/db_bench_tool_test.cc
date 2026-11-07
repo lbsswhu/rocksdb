@@ -129,13 +129,26 @@ namespace {}  // namespace
 TEST_F(DBBenchTest, StrongVisibilityFlagPersistsEffectiveOptions) {
   GFLAGS_NAMESPACE::FlagSaver restore_flags;
   ResetArgs();
-  AppendArgs({"./db_bench", "--benchmarks=fillseq", "--options_file=",
-              "--use_existing_db=0", "--num=100", "--duration=0", "--threads=1",
-              "--compression_type=none", "--sync=0", "--enable_async_commit=1",
+  AppendArgs({"./db_bench",
+              "--benchmarks=fillseq",
+              "--options_file=",
+              "--use_existing_db=0",
+              "--num=100",
+              "--duration=0",
+              "--threads=1",
+              "--compression_type=none",
+              "--sync=0",
+              "--enable_async_commit=1",
               "--async_commit_strong_visibility=1",
-              "--enable_pipelined_write=0", "--async_commit_memtable_threads=1",
-              "--allow_concurrent_memtable_write=0", "--histogram=0",
-              "--report_file_operations=0", "--db=" + db_path_});
+              "--async_commit_wait_slots=3",
+              "--async_commit_wait_spin_us=0",
+              "--async_commit_wait_yield_us=7",
+              "--enable_pipelined_write=0",
+              "--async_commit_memtable_threads=1",
+              "--allow_concurrent_memtable_write=0",
+              "--histogram=0",
+              "--report_file_operations=0",
+              "--db=" + db_path_});
   testing::internal::CaptureStdout();
   const int result = db_bench_tool(argc(), argv());
   const std::string output = testing::internal::GetCapturedStdout();
@@ -148,6 +161,9 @@ TEST_F(DBBenchTest, StrongVisibilityFlagPersistsEffectiveOptions) {
   EXPECT_TRUE(loaded.async_commit_strong_visibility);
   EXPECT_TRUE(loaded.enable_async_commit);
   EXPECT_EQ(1, loaded.async_commit_memtable_threads);
+  EXPECT_EQ(3U, loaded.async_commit_wait_slots);
+  EXPECT_EQ(0U, loaded.async_commit_wait_spin_us);
+  EXPECT_EQ(7U, loaded.async_commit_wait_yield_us);
   EXPECT_FALSE(loaded.enable_pipelined_write);
 }
 

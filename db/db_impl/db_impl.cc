@@ -279,8 +279,8 @@ DBImpl::DBImpl(const DBOptions& options, const std::string& dbname,
   preserve_deletes_seqnum_.store(0);
 
   if (immutable_db_options_.enable_async_commit) {
-    async_commit_context_.reset(new ThreadLocalPtr(
-        [](void* ptr) { delete static_cast<AsyncCommitThreadContext*>(ptr); }));
+    async_commit_wait_slots_.reset(
+        new AsyncCommitWaitSlot[immutable_db_options_.async_commit_wait_slots]);
   }
   if (write_buffer_manager_) {
     wbm_stall_.reset(new WBMStallInterface());
@@ -528,8 +528,10 @@ Status DBImpl::CloseHelper() {
     {
       std::lock_guard<std::mutex> lock(async_commit_mutex_);
       async_commit_closing_ = true;
+      async_commit_wait_stopped_.store(true, std::memory_order_release);
     }
     async_commit_cv_.notify_all();
+    NotifyAllAsyncCommitWaiters();
   }
   // Guarantee that there is no background error recovery in progress before
   // continuing with the shutdown

@@ -140,6 +140,12 @@ DBOptions BuildDBOptions(const ImmutableDBOptions& immutable_db_options,
   options.enable_async_commit = immutable_db_options.enable_async_commit;
   options.async_commit_strong_visibility =
       immutable_db_options.async_commit_strong_visibility;
+  options.async_commit_wait_slots =
+      immutable_db_options.async_commit_wait_slots;
+  options.async_commit_wait_spin_us =
+      immutable_db_options.async_commit_wait_spin_us;
+  options.async_commit_wait_yield_us =
+      immutable_db_options.async_commit_wait_yield_us;
   options.async_commit_memtable_threads =
       immutable_db_options.async_commit_memtable_threads;
   options.max_async_commit_pending_groups =

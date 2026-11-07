@@ -1192,6 +1192,12 @@ DEFINE_bool(
     "Wait for async memtable publication before successful write return");
 DEFINE_int32(async_commit_memtable_threads, 0,
              "Dedicated async commit memtable workers (zero uses original leader)");
+DEFINE_uint32(async_commit_wait_slots, 32,
+              "Async publication wait shards, in [1, 1024]");
+DEFINE_uint64(async_commit_wait_spin_us, 10,
+              "CPU pause duration before async publication yield/block");
+DEFINE_uint64(async_commit_wait_yield_us, 40,
+              "Scheduler yield duration after async publication spin");
 DEFINE_uint64(max_async_commit_pending_groups, 4096,
               "Maximum pending async commit groups with a worker pool");
 DEFINE_uint64(max_async_commit_pending_bytes, 67108864,
@@ -4364,6 +4370,9 @@ class Benchmark {
     options.async_commit_strong_visibility =
         FLAGS_async_commit_strong_visibility;
     options.async_commit_memtable_threads = FLAGS_async_commit_memtable_threads;
+    options.async_commit_wait_slots = FLAGS_async_commit_wait_slots;
+    options.async_commit_wait_spin_us = FLAGS_async_commit_wait_spin_us;
+    options.async_commit_wait_yield_us = FLAGS_async_commit_wait_yield_us;
     options.max_async_commit_pending_groups = FLAGS_max_async_commit_pending_groups;
     options.max_async_commit_pending_bytes =
         FLAGS_max_async_commit_pending_bytes;

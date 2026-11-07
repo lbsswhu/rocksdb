@@ -30,6 +30,38 @@ class AsyncCommitTest : public DBTestBase {
   AsyncCommitTest() : DBTestBase("async_commit_test", true) {}
 };
 
+TEST_F(AsyncCommitTest, PublicationWaitOptionsRoundTripAndValidation) {
+  DBOptions parsed;
+  ASSERT_OK(GetDBOptionsFromString(
+      DBOptions(),
+      "enable_async_commit=true;async_commit_wait_slots=1024;"
+      "async_commit_wait_spin_us=3;async_commit_wait_yield_us=7;",
+      &parsed));
+  Options options(parsed, ColumnFamilyOptions());
+  options.create_if_missing = true;
+  Reopen(options);
+  DBOptions loaded;
+  std::vector<ColumnFamilyDescriptor> columns;
+  ASSERT_OK(LoadLatestOptions(dbname_, env_, &loaded, &columns));
+  for (const auto& candidate : {loaded, db_->GetDBOptions()}) {
+    std::string text;
+    ASSERT_OK(GetStringFromDBOptions(&text, candidate));
+    EXPECT_NE(std::string::npos, text.find("async_commit_wait_slots=1024"));
+    EXPECT_NE(std::string::npos, text.find("async_commit_wait_spin_us=3"));
+    EXPECT_NE(std::string::npos, text.find("async_commit_wait_yield_us=7"));
+  }
+  EXPECT_FALSE(db_->SetDBOptions({{"async_commit_wait_slots", "1"}}).ok());
+  Close();
+  for (const auto& count : {"0", "1025"}) {
+    DBOptions invalid;
+    ASSERT_OK(GetDBOptionsFromString(
+        parsed, std::string("async_commit_wait_slots=") + count, &invalid));
+    EXPECT_TRUE(
+        TryReopen(Options(invalid, ColumnFamilyOptions())).IsInvalidArgument());
+  }
+  Reopen(options);
+}
+
 TEST_F(AsyncCommitTest, StrongVisibilityOptionsRoundTripAndValidation) {
   std::string serialized;
   ASSERT_OK(GetStringFromDBOptions(&serialized, DBOptions()));
@@ -312,8 +344,10 @@ TEST_F(AsyncCommitTest, PoolOutOfOrderCompletionPublishesOnlyWholePrefix) {
   EXPECT_EQ(0U, db_->GetLatestSequenceNumber());
   std::thread observer([&] {
     std::string value;
-    EXPECT_TRUE(db_->Get(ReadOptions(), handles_[0], "same", &value).IsNotFound());
-    EXPECT_TRUE(db_->Get(ReadOptions(), handles_[1], "same", &value).IsNotFound());
+    ReadOptions read;
+    read.deadline = std::chrono::microseconds(env_->NowMicros() - 1);
+    EXPECT_TRUE(db_->Get(read, handles_[0], "same", &value).IsTimedOut());
+    EXPECT_TRUE(db_->Get(read, handles_[1], "same", &value).IsTimedOut());
   });
   observer.join();
   ReadOptions deadline;
@@ -505,7 +539,9 @@ TEST_P(AsyncCommitModesTest, FollowerOwnershipAndReadViews) {
   EXPECT_TRUE(returned.Wait());
   EXPECT_FALSE(leader_done.load());
   std::string external;
-  EXPECT_TRUE(db_->Get(ReadOptions(), "follower", &external).IsNotFound());
+  ReadOptions unpublished;
+  unpublished.deadline = std::chrono::microseconds(env_->NowMicros() - 1);
+  EXPECT_TRUE(db_->Get(unpublished, "follower", &external).IsTimedOut());
   EXPECT_EQ(1U, db_->GetLatestSequenceNumber());
   EXPECT_TRUE(read_waiting.Wait());
   apply.Set();
@@ -846,6 +882,11 @@ TEST_P(AsyncCommitModesTest, AtomicCrossCFViewsAndIteratorRefresh) {
   ASSERT_OK(db_->CreateColumnFamily(ColumnFamilyOptions(), "second", &cf));
   ASSERT_OK(db_->Put(Writes(), "key", "old-default"));
   ASSERT_OK(db_->Put(Writes(), cf, "key", "old-second"));
+  const Snapshot* snapshot = db_->GetSnapshot();
+  ASSERT_NE(nullptr, snapshot);
+  std::vector<Iterator*> iterators;
+  ASSERT_OK(db_->NewIterators(ReadOptions(), {db_->DefaultColumnFamily(), cf},
+                              &iterators));
   AsyncEvent partial, release, refreshing;
   std::atomic<int> inserted{0};
   auto* sp = SyncPoint::GetInstance();
@@ -894,17 +935,18 @@ TEST_P(AsyncCommitModesTest, AtomicCrossCFViewsAndIteratorRefresh) {
   });
   EXPECT_TRUE(partial.Wait());
   EXPECT_TRUE(refreshing.Wait());
-  const Snapshot* snapshot = db_->GetSnapshot();
-  EXPECT_NE(nullptr, snapshot);
   EXPECT_EQ(2U, db_->GetLatestSequenceNumber());
+  ReadOptions unpublished;
+  unpublished.deadline = std::chrono::microseconds(env_->NowMicros() - 1);
   std::vector<std::string> values;
-  auto statuses = db_->MultiGet(ReadOptions(), {db_->DefaultColumnFamily(), cf},
+  auto statuses = db_->MultiGet(unpublished, {db_->DefaultColumnFamily(), cf},
                                 {Slice("key"), Slice("key")}, &values);
-  for (const auto& status : statuses) EXPECT_OK(status);
-  EXPECT_EQ((std::vector<std::string>{"old-default", "old-second"}), values);
-  std::vector<Iterator*> iterators;
-  EXPECT_OK(db_->NewIterators(ReadOptions(), {db_->DefaultColumnFamily(), cf},
-                              &iterators));
+  for (const auto& status : statuses) EXPECT_TRUE(status.IsTimedOut());
+  std::vector<Iterator*> rejected;
+  EXPECT_TRUE(db_->NewIterators(unpublished, {db_->DefaultColumnFamily(), cf},
+                                &rejected)
+                  .IsTimedOut());
+  EXPECT_TRUE(rejected.empty());
   for (size_t i = 0; i < iterators.size(); ++i) {
     iterators[i]->Seek("key");
     EXPECT_TRUE(iterators[i]->Valid());

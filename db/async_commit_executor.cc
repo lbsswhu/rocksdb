@@ -302,8 +302,10 @@ void AsyncCommitExecutor::Complete(const std::shared_ptr<AsyncCommitGroup>& grou
                           4 * sizeof(std::shared_ptr<AsyncCommitGroup>);
   const size_t old_bytes = group->reserved_bytes;
   db_->ReleaseAsyncCommitResources(group.get());
+  SequenceNumber previous, published;
   {
     std::lock_guard<std::mutex> lock(db_->async_commit_mutex_);
+    previous = db_->versions_->LastSequence();
     TEST_SYNC_POINT("AsyncCommitExecutor::Complete:Locked");
     assert(old_bytes >= metadata);
     db_->async_commit_pending_bytes_ -= old_bytes - metadata;
@@ -325,7 +327,9 @@ void AsyncCommitExecutor::Complete(const std::shared_ptr<AsyncCommitGroup>& grou
       retired->reserved_bytes = 0;
       --db_->async_commit_pending_groups_;
     }
+    published = db_->versions_->LastSequence();
   }
   db_->async_commit_cv_.notify_all();
+  db_->NotifyAsyncCommitPublication(previous, published);
 }
 }  // namespace ROCKSDB_NAMESPACE

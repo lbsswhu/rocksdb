@@ -327,6 +327,18 @@ static std::unordered_map<std::string, OptionTypeInfo>
          {offsetof(struct ImmutableDBOptions, async_commit_memtable_threads),
           OptionType::kInt, OptionVerificationType::kNormal,
           OptionTypeFlags::kNone}},
+        {"async_commit_wait_slots",
+         {offsetof(struct ImmutableDBOptions, async_commit_wait_slots),
+          OptionType::kUInt32T, OptionVerificationType::kNormal,
+          OptionTypeFlags::kNone}},
+        {"async_commit_wait_spin_us",
+         {offsetof(struct ImmutableDBOptions, async_commit_wait_spin_us),
+          OptionType::kUInt64T, OptionVerificationType::kNormal,
+          OptionTypeFlags::kNone}},
+        {"async_commit_wait_yield_us",
+         {offsetof(struct ImmutableDBOptions, async_commit_wait_yield_us),
+          OptionType::kUInt64T, OptionVerificationType::kNormal,
+          OptionTypeFlags::kNone}},
         {"max_async_commit_pending_groups",
          {offsetof(struct ImmutableDBOptions, max_async_commit_pending_groups),
           OptionType::kSizeT, OptionVerificationType::kNormal,
@@ -719,6 +731,9 @@ ImmutableDBOptions::ImmutableDBOptions(const DBOptions& options)
       enable_pipelined_write(options.enable_pipelined_write),
       enable_async_commit(options.enable_async_commit),
       async_commit_strong_visibility(options.async_commit_strong_visibility),
+      async_commit_wait_slots(options.async_commit_wait_slots),
+      async_commit_wait_spin_us(options.async_commit_wait_spin_us),
+      async_commit_wait_yield_us(options.async_commit_wait_yield_us),
       max_async_commit_pending_bytes(options.max_async_commit_pending_bytes),
       async_commit_memtable_threads(options.async_commit_memtable_threads),
       max_async_commit_pending_groups(options.max_async_commit_pending_groups),
@@ -880,6 +895,14 @@ void ImmutableDBOptions::Dump(Logger* log) const {
                    enable_async_commit);
   ROCKS_LOG_HEADER(log, "          Options.async_commit_strong_visibility: %d",
                    async_commit_strong_visibility);
+  ROCKS_LOG_HEADER(log, "                 Options.async_commit_wait_slots: %u",
+                   async_commit_wait_slots);
+  ROCKS_LOG_HEADER(log,
+                   "               Options.async_commit_wait_spin_us: %" PRIu64,
+                   async_commit_wait_spin_us);
+  ROCKS_LOG_HEADER(log,
+                   "              Options.async_commit_wait_yield_us: %" PRIu64,
+                   async_commit_wait_yield_us);
   ROCKS_LOG_HEADER(
       log, "         Options.max_async_commit_pending_bytes: %" ROCKSDB_PRIszt,
       max_async_commit_pending_bytes);

@@ -1281,9 +1281,6 @@ class DBImpl : public DB {
   Status AsyncWriteImpl(const WriteOptions& options, WriteBatch* updates,
                         uint64_t* log_used, uint64_t* seq_used);
 
-  struct AsyncCommitThreadContext {
-    SequenceNumber required_sequence = 0;
-  };
   Status BuildAsyncCommitGroup(WriteThread::WriteGroup& writers,
                                AsyncCommitGroup* group);
   Status ApplyAsyncCommitGroup(const AsyncCommitGroup& group);
@@ -1303,6 +1300,9 @@ class DBImpl : public DB {
   Status PublishAsyncCommitSequence(SequenceNumber sequence);
   Status WaitForAsyncCommitSequence(SequenceNumber target,
                                     const ReadOptions& options);
+  void NotifyAsyncCommitPublication(SequenceNumber previous,
+                                    SequenceNumber published);
+  void NotifyAllAsyncCommitWaiters();
 
   Status PipelinedWriteImpl(const WriteOptions& options, WriteBatch* updates,
                             WriteCallback* callback = nullptr,
@@ -2130,9 +2130,16 @@ class DBImpl : public DB {
   WriteThread write_thread_;
   WriteBatch tmp_batch_;
 
-  // Independent TLS instance prevents a new DB at a reused address inheriting
-  // R.
-  std::unique_ptr<ThreadLocalPtr> async_commit_context_;
+  // Written by the WAL leader before WAL IO; read at each user read boundary.
+  // Recovery/publication may start above zero; reads also include LastSequence.
+  std::atomic<SequenceNumber> async_commit_allocated_sequence_{0};
+  struct AsyncCommitWaitSlot {
+    std::mutex mutex;
+    std::condition_variable cv;
+    size_t waiters = 0;  // Protected by this slot's mutex.
+  };
+  std::unique_ptr<AsyncCommitWaitSlot[]> async_commit_wait_slots_;
+  std::atomic<bool> async_commit_wait_stopped_{false};
   std::unique_ptr<AsyncCommitExecutor> async_commit_executor_;
   std::mutex async_commit_mutex_;
   std::condition_variable async_commit_cv_;

@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <chrono>
 #include <limits>
+#include <thread>
 
 #include "db/async_commit_executor.h"
 #include "db/db_impl/db_impl.h"
@@ -87,8 +88,10 @@ void DBImpl::FailAsyncCommit(const Status& status) {
   {
     std::lock_guard<std::mutex> lock(async_commit_mutex_);
     if (async_commit_error_.ok()) async_commit_error_ = status;
+    async_commit_wait_stopped_.store(true, std::memory_order_release);
   }
   async_commit_cv_.notify_all();
+  NotifyAllAsyncCommitWaiters();
   if (async_commit_executor_) async_commit_executor_->WakeAll();
   ROCKS_LOG_ERROR(immutable_db_options_.info_log,
                   "Async commit stopped; reopen required: %s",
@@ -96,14 +99,17 @@ void DBImpl::FailAsyncCommit(const Status& status) {
 }
 
 Status DBImpl::PublishAsyncCommitSequence(SequenceNumber sequence) {
+  SequenceNumber previous;
   {
     std::lock_guard<std::mutex> lock(async_commit_mutex_);
     if (!async_commit_error_.ok()) return async_commit_error_;
     if (async_commit_closing_) return Status::ShutdownInProgress();
     assert(sequence >= versions_->LastSequence());
+    previous = versions_->LastSequence();
     versions_->SetLastSequence(sequence);
   }
   async_commit_cv_.notify_all();
+  NotifyAsyncCommitPublication(previous, sequence);
   return Status::OK();
 }
 
@@ -111,10 +117,12 @@ Status DBImpl::PrepareAsyncCommitRead(const ReadOptions& options) {
   if (!immutable_db_options_.enable_async_commit ||
       immutable_db_options_.async_commit_strong_visibility)
     return Status::OK();
-  auto* context =
-      static_cast<AsyncCommitThreadContext*>(async_commit_context_->Get());
-  if (!context) return Status::OK();
-  SequenceNumber target = context->required_sequence;
+  // Capture once, before selecting a read view or doing any lookup. Never
+  // chase writes allocated after this boundary. The max includes recovery and
+  // sequence-consuming management operations preceding the first async write.
+  SequenceNumber target =
+      std::max(async_commit_allocated_sequence_.load(std::memory_order_acquire),
+               versions_->LastSequence());
   if (versions_->LastSequence() >= target) return Status::OK();
   TEST_SYNC_POINT_CALLBACK("DBImpl::PrepareAsyncCommitRead:Wait", &target);
   return WaitForAsyncCommitSequence(target, options);
@@ -123,10 +131,51 @@ Status DBImpl::PrepareAsyncCommitRead(const ReadOptions& options) {
 Status DBImpl::WaitForAsyncCommitSequence(SequenceNumber target,
                                           const ReadOptions& options) {
   if (versions_->LastSequence() >= target) return Status::OK();
-  std::unique_lock<std::mutex> lock(async_commit_mutex_);
+  const auto start = std::chrono::steady_clock::now();
+  const uint64_t spin_us = immutable_db_options_.async_commit_wait_spin_us;
+  const uint64_t busy_us =
+      spin_us + immutable_db_options_.async_commit_wait_yield_us;
+  auto check_deadline = [&]() {
+    return options.deadline.count() != 0 &&
+           (options.deadline.count() < 0 ||
+            immutable_db_options_.clock->NowMicros() >=
+                static_cast<uint64_t>(options.deadline.count()));
+  };
   while (versions_->LastSequence() < target) {
-    if (!async_commit_error_.ok()) return async_commit_error_;
-    if (async_commit_closing_) return Status::ShutdownInProgress();
+    if (async_commit_wait_stopped_.load(std::memory_order_acquire))
+      return AsyncCommitStatus();
+    if (check_deadline())
+      return Status::TimedOut("waiting for async commit publication");
+    const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
+                             std::chrono::steady_clock::now() - start)
+                             .count();
+    if (static_cast<uint64_t>(elapsed) >= busy_us) break;
+    if (static_cast<uint64_t>(elapsed) < spin_us) {
+      TEST_SYNC_POINT("DBImpl::WaitForAsyncCommitSequence:Spin");
+      port::AsmVolatilePause();
+    } else {
+      TEST_SYNC_POINT("DBImpl::WaitForAsyncCommitSequence:Yield");
+      std::this_thread::yield();
+    }
+  }
+  if (versions_->LastSequence() >= target) return Status::OK();
+  uint32_t index = target % immutable_db_options_.async_commit_wait_slots;
+  TEST_SYNC_POINT_CALLBACK("DBImpl::WaitForAsyncCommitSequence:BeforeSlotLock",
+                           &index);
+  auto& slot = async_commit_wait_slots_[index];
+  std::unique_lock<std::mutex> lock(slot.mutex);
+  // The publisher locks every slot crossed by P, even an empty one. Together
+  // with this locked predicate recheck this closes the check-to-sleep race.
+  ++slot.waiters;
+  struct Registration {
+    size_t& waiters;
+    ~Registration() { --waiters; }
+  } registration{slot.waiters};
+  while (versions_->LastSequence() < target) {
+    if (async_commit_wait_stopped_.load(std::memory_order_acquire))
+      return AsyncCommitStatus();
+    TEST_SYNC_POINT_CALLBACK("DBImpl::WaitForAsyncCommitSequence:BeforeWait",
+                             &index);
     if (options.deadline.count() != 0) {
       uint64_t now = immutable_db_options_.clock->NowMicros();
       if (options.deadline.count() <= 0 ||
@@ -137,15 +186,39 @@ Status DBImpl::WaitForAsyncCommitSequence(SequenceNumber target,
       // even on libstdc++ versions whose steady-clock wait is not intercepted
       // by older thread sanitizers. Keep the configured clock's remaining
       // duration, and recheck its absolute deadline on every wakeup.
-      async_commit_cv_.wait_until(
+      slot.cv.wait_until(
           lock, std::chrono::system_clock::now() +
                     std::chrono::microseconds(
                         static_cast<uint64_t>(options.deadline.count()) - now));
     } else {
-      async_commit_cv_.wait(lock);
+      slot.cv.wait(lock);
     }
   }
   return Status::OK();
+}
+
+void DBImpl::NotifyAsyncCommitPublication(SequenceNumber previous,
+                                          SequenceNumber published) {
+  assert(published >= previous);
+  const uint32_t slots = immutable_db_options_.async_commit_wait_slots;
+  const uint32_t count = static_cast<uint32_t>(
+      std::min<SequenceNumber>(published - previous, slots));
+  uint32_t index = (previous + 1) % slots;
+  for (uint32_t i = 0; i < count; ++i, index = (index + 1) % slots) {
+    TEST_SYNC_POINT_CALLBACK(
+        "DBImpl::NotifyAsyncCommitPublication:BeforeSlotLock", &index);
+    auto& slot = async_commit_wait_slots_[index];
+    std::lock_guard<std::mutex> lock(slot.mutex);
+    if (slot.waiters != 0) slot.cv.notify_all();
+  }
+}
+
+void DBImpl::NotifyAllAsyncCommitWaiters() {
+  for (uint32_t i = 0; i < immutable_db_options_.async_commit_wait_slots; ++i) {
+    auto& slot = async_commit_wait_slots_[i];
+    std::lock_guard<std::mutex> lock(slot.mutex);
+    if (slot.waiters != 0) slot.cv.notify_all();
+  }
 }
 
 Status DBImpl::ReserveAsyncCommitBytes(size_t bytes, size_t already_reserved,
@@ -349,18 +422,8 @@ Status DBImpl::ApplyAsyncCommitGroup(const AsyncCommitGroup& group) {
 
 Status DBImpl::AsyncWriteImpl(const WriteOptions& options, WriteBatch* batch,
                               uint64_t* log_used, uint64_t* seq_used) {
-  // Allocate before enqueue, never after returning a successful WAL result.
   const bool strong_visibility =
       immutable_db_options_.async_commit_strong_visibility;
-  AsyncCommitThreadContext* context = nullptr;
-  if (!strong_visibility) {
-    context =
-        static_cast<AsyncCommitThreadContext*>(async_commit_context_->Get());
-    if (!context) {
-      context = new AsyncCommitThreadContext;
-      async_commit_context_->Reset(context);
-    }
-  }
   Status status = AsyncCommitStatus();
   if (!status.ok()) return status;
   PERF_TIMER_GUARD(write_pre_and_post_process_time);
@@ -375,9 +438,6 @@ Status DBImpl::AsyncWriteImpl(const WriteOptions& options, WriteBatch* batch,
         // worker pool publishes the ordered prefix independently of callers.
         result = WaitForAsyncCommitSequence(writer.async_end_sequence,
                                             ReadOptions());
-      } else if (writer.async_has_sequence) {
-        context->required_sequence =
-            std::max(context->required_sequence, writer.async_end_sequence);
       }
     }
     if (log_used) *log_used = writer.log_used;
@@ -443,6 +503,9 @@ Status DBImpl::AsyncWriteImpl(const WriteOptions& options, WriteBatch* batch,
       // A=kMaxSequenceNumber is safe: no records consume A+1 in this batch.
       WriteBatchInternal::SetSequence(group.apply_batch, allocated + 1);
       write_thread_.UpdateLastSequence(group.last_sequence);
+      async_commit_allocated_sequence_.store(group.last_sequence,
+                                             std::memory_order_release);
+      TEST_SYNC_POINT("DBImpl::AsyncWriteImpl:SequenceAllocated");
       {
         PERF_TIMER_GUARD(write_wal_time);
         IOStatus io_status = WritePreparedBatchToWAL(

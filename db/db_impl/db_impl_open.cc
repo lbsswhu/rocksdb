@@ -233,6 +233,16 @@ Status DBImpl::ValidateOptions(
 }
 
 Status DBImpl::ValidateOptions(const DBOptions& db_options) {
+  if (db_options.async_commit_wait_slots < 1 ||
+      db_options.async_commit_wait_slots > 1024 ||
+      db_options.async_commit_wait_spin_us >
+          static_cast<uint64_t>(std::numeric_limits<int64_t>::max()) / 1000 ||
+      db_options.async_commit_wait_yield_us >
+          static_cast<uint64_t>(std::numeric_limits<int64_t>::max()) / 1000 -
+              db_options.async_commit_wait_spin_us) {
+    return Status::InvalidArgument(
+        "invalid async commit publication wait options");
+  }
   if (db_options.async_commit_strong_visibility &&
       (!db_options.enable_async_commit ||
        db_options.async_commit_memtable_threads <= 0)) {

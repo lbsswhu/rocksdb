@@ -1050,9 +1050,9 @@ struct DBOptions {
   // enable_pipelined_write, unless async_commit_strong_visibility is enabled.
   // The pool independently overlaps WAL/application.
   // A successful return inherits the durability of WriteOptions::sync. New
-  // user read views on the same native thread and DB wait for that thread's
-  // successful writes to be published. Other threads do not inherit this
-  // dependency; explicit snapshots and existing iterators keep their history.
+  // user read views capture the DB's allocated sequence at entry and wait for
+  // that fixed target to be published, including writes from other threads.
+  // Explicit snapshots and existing iterators keep their history.
   // Compatible with enable_pipelined_write. Immutable after opening the DB.
   bool enable_async_commit = false;
 
@@ -1064,6 +1064,17 @@ struct DBOptions {
   // Requires enable_async_commit and async_commit_memtable_threads > 0.
   // Immutable after opening the DB. Default: false.
   bool async_commit_strong_visibility = false;
+
+  // Publication wait shards, selected by target sequence % slots. Applies to
+  // read waits and strong-visibility write waits. Range: [1, 1024]. Immutable.
+  uint32_t async_commit_wait_slots = 32;
+
+  // Busy wait with CPU pause, then scheduler yield for these durations before
+  // blocking on a publication shard. Zero disables the corresponding phase.
+  // Uses elapsed steady-clock time; read deadlines remain in the DB clock.
+  // Immutable. Defaults: 10 us spin + 40 us yield.
+  uint64_t async_commit_wait_spin_us = 10;
+  uint64_t async_commit_wait_yield_us = 40;
 
   // Bounds the additional group buffers/metadata retained by async commit.
   // Without a pool a single-request payload is borrowed. With a pool all

@@ -69,6 +69,9 @@ struct ImmutableDBOptions {
   bool enable_pipelined_write;
   bool enable_async_commit;
   bool async_commit_strong_visibility;
+  uint32_t async_commit_wait_slots;
+  uint64_t async_commit_wait_spin_us;
+  uint64_t async_commit_wait_yield_us;
   size_t max_async_commit_pending_bytes;
   int async_commit_memtable_threads;
   size_t max_async_commit_pending_groups;
