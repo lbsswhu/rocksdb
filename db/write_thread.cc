@@ -22,6 +22,8 @@ WriteThread::WriteThread(const ImmutableDBOptions& db_options)
       allow_concurrent_memtable_write_(
           db_options.allow_concurrent_memtable_write),
       enable_pipelined_write_(db_options.enable_pipelined_write),
+      use_async_wal_event_(db_options.enable_async_commit &&
+                           db_options.async_commit_memtable_threads == 1),
       max_write_batch_group_size_bytes(
           db_options.max_write_batch_group_size_bytes),
       newest_writer_(nullptr),
@@ -32,6 +34,21 @@ WriteThread::WriteThread(const ImmutableDBOptions& db_options)
       stall_cv_(&stall_mu_) {}
 
 uint8_t WriteThread::BlockingAwaitState(Writer* w, uint8_t goal_mask) {
+  if (auto* event = w->async_wal_wait_event) {
+    auto state = w->state.load(std::memory_order_acquire);
+    while ((state & goal_mask) == 0) {
+      const auto epoch = event->PrepareWait();
+      TEST_SYNC_POINT("WriteThread::AsyncWALWait:Registered");
+      state = w->state.load(std::memory_order_acquire);
+      if ((state & goal_mask) == 0) {
+        TEST_SYNC_POINT("WriteThread::AsyncWALWait:BeforeWait");
+        event->WaitWithMask(epoch, w->async_wal_wait_mask);
+      }
+      event->CancelWait();
+      state = w->state.load(std::memory_order_acquire);
+    }
+    return state;
+  }
   // We're going to block.  Lazily create the mutex.  We guarantee
   // propagation of this construction to the waker via the
   // STATE_LOCKED_WAITING state.  The waker won't try to touch the mutex
@@ -209,6 +226,10 @@ uint8_t WriteThread::AwaitState(Writer* w, uint8_t goal_mask,
 
 void WriteThread::SetState(Writer* w, uint8_t new_state) {
   assert(w);
+  if (const uint32_t mask = SetAsyncWalState(w, new_state)) {
+    async_wal_event_.NotifyMask(mask);
+    return;
+  }
   auto state = w->state.load(std::memory_order_acquire);
   if (state == STATE_LOCKED_WAITING ||
       !w->state.compare_exchange_strong(state, new_state)) {
@@ -219,6 +240,18 @@ void WriteThread::SetState(Writer* w, uint8_t new_state) {
     w->state.store(new_state, std::memory_order_relaxed);
     w->StateCV().notify_one();
   }
+}
+
+uint32_t WriteThread::SetAsyncWalState(Writer* w, uint8_t new_state) {
+  if (w->async_wal_wait_event == nullptr) return 0;
+  assert(w->async_wal_wait_event == &async_wal_event_);
+  assert(w->state.load(std::memory_order_relaxed) != STATE_LOCKED_WAITING);
+  const uint32_t mask = w->async_wal_wait_mask;
+  assert(mask != 0);
+  // The Writer may disappear as soon as the release becomes visible. Do not
+  // access it again, including its event pointer, after this store.
+  w->state.store(new_state, std::memory_order_release);
+  return mask;
 }
 
 bool WriteThread::LinkOne(Writer* w, std::atomic<Writer*>* newest_writer) {
@@ -381,6 +414,13 @@ static WriteThread::AdaptationContext jbg_ctx("JoinBatchGroup");
 void WriteThread::JoinBatchGroup(Writer* w) {
   TEST_SYNC_POINT_CALLBACK("WriteThread::JoinBatchGroup:Start", w);
   assert(w->batch != nullptr);
+  if (use_async_wal_event_) {
+    // Compute once per frontend thread; no clock or OS thread-id syscall.
+    static thread_local const uint32_t mask =
+        uint32_t{1} << (std::hash<std::thread::id>{}(std::this_thread::get_id()) & 31);
+    w->async_wal_wait_event = &async_wal_event_;
+    w->async_wal_wait_mask = mask;
+  }
 
   bool linked_as_leader = LinkOne(w, &newest_writer_);
 
@@ -796,9 +836,13 @@ void WriteThread::DetachAsyncFollowersKeepLeader(WriteGroup& group,
   group.last_writer = leader;
   group.size = 1;
   TEST_SYNC_POINT("WriteThread::DetachAsyncFollowersKeepLeader:Detached");
-  NotifyAsyncFollowers(last, leader, status, [this](Writer* w, uint8_t state) {
-    SetState(w, state);
+  uint32_t notify = 0;
+  NotifyAsyncFollowers(last, leader, status, [this, &notify](Writer* w,
+                                                           uint8_t state) {
+    if (const uint32_t mask = SetAsyncWalState(w, state)) notify |= mask;
+    else SetState(w, state);
   });
+  if (notify) async_wal_event_.NotifyMask(notify);
 }
 
 void WriteThread::TransferAsyncGroupToMemtable(WriteGroup& group,
@@ -849,12 +893,17 @@ void WriteThread::ExitAsyncWalGroup(WriteGroup& group, const Status& status) {
   }
   group.leader = group.last_writer = nullptr;
   group.size = 0;
-  NotifyAsyncFollowers(last, leader, status, [this](Writer* w, uint8_t state) {
-    SetState(w, state);
+  uint32_t notify = 0;
+  NotifyAsyncFollowers(last, leader, status, [this, &notify](Writer* w,
+                                                           uint8_t state) {
+    if (const uint32_t mask = SetAsyncWalState(w, state)) notify |= mask;
+    else SetState(w, state);
   });
   leader->status = status;
   leader->write_group = nullptr;
-  SetState(leader, status.ok() ? STATE_WAL_COMPLETED : STATE_COMPLETED);
+  const uint8_t state = status.ok() ? STATE_WAL_COMPLETED : STATE_COMPLETED;
+  if (!SetAsyncWalState(leader, state)) SetState(leader, state);
+  if (notify) async_wal_event_.NotifyMask(notify);
 }
 
 static WriteThread::AdaptationContext async_mem_ctx("AsyncMemtableWriter");

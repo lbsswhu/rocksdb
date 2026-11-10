@@ -30,12 +30,84 @@ class AsyncCommitTest : public DBTestBase {
   AsyncCommitTest() : DBTestBase("async_commit_test", true) {}
 };
 
+TEST_F(AsyncCommitTest, RandomPublicationSpinOptionsRoundTripAndValidation) {
+  DBOptions parsed;
+  ASSERT_OK(GetDBOptionsFromString(
+      DBOptions(),
+      "async_commit_wait_spin_rounds=30;async_commit_wait_spin_delay=6;"
+      "async_commit_wait_spin_pause_multiplier=50;", &parsed));
+  Options options(parsed, ColumnFamilyOptions());
+  options.create_if_missing = true;
+  Reopen(options);
+  DBOptions loaded;
+  std::vector<ColumnFamilyDescriptor> columns;
+  ASSERT_OK(LoadLatestOptions(dbname_, env_, &loaded, &columns));
+  for (const auto& candidate : {loaded, db_->GetDBOptions()}) {
+    std::string text;
+    ASSERT_OK(GetStringFromDBOptions(&text, candidate));
+    EXPECT_NE(std::string::npos, text.find("async_commit_wait_spin_rounds=30"));
+    EXPECT_NE(std::string::npos, text.find("async_commit_wait_spin_delay=6"));
+    EXPECT_NE(std::string::npos,
+              text.find("async_commit_wait_spin_pause_multiplier=50"));
+  }
+  EXPECT_FALSE(db_->SetDBOptions({{"async_commit_wait_spin_delay", "1"}}).ok());
+  EXPECT_FALSE(db_->SetDBOptions(
+      {{"async_commit_wait_spin_pause_multiplier", "1"}}).ok());
+  Close();
+  for (const auto& entry : {"async_commit_wait_spin_delay=1001",
+                            "async_commit_wait_spin_pause_multiplier=101"}) {
+    DBOptions invalid;
+    ASSERT_OK(GetDBOptionsFromString(parsed, entry, &invalid));
+    EXPECT_TRUE(
+        TryReopen(Options(invalid, ColumnFamilyOptions())).IsInvalidArgument());
+  }
+  Reopen(options);
+}
+
+TEST_F(AsyncCommitTest, LegacyPublicationBudgetsAreIgnoredAndNotSerialized) {
+  DBOptions parsed;
+  ASSERT_OK(GetDBOptionsFromString(
+      DBOptions(),
+      "async_commit_wait_spin_us=0;async_commit_wait_yield_us=0;", &parsed));
+  std::string text;
+  ASSERT_OK(GetStringFromDBOptions(&text, parsed));
+  EXPECT_EQ(std::string::npos, text.find("async_commit_wait_spin_us="));
+  EXPECT_EQ(std::string::npos, text.find("async_commit_wait_yield_us="));
+  EXPECT_NE(std::string::npos, text.find("async_commit_wait_spin_rounds=30"));
+  ASSERT_OK(GetDBOptionsFromString(
+      parsed, "async_commit_wait_spin_rounds=0;", &parsed));
+  ASSERT_OK(GetStringFromDBOptions(&text, parsed));
+  EXPECT_NE(std::string::npos, text.find("async_commit_wait_spin_rounds=0"));
+}
+
+TEST_F(AsyncCommitTest, LegacyPublicationOptionsFileUsesRoundDefault) {
+  Options options;
+  options.create_if_missing = true;
+  Reopen(options);
+  std::string name;
+  ASSERT_OK(GetLatestOptionsFileName(dbname_, env_, &name));
+  std::string contents;
+  ASSERT_OK(ReadFileToString(env_, dbname_ + "/" + name, &contents));
+  const std::string key = "async_commit_wait_spin_rounds=30";
+  const auto pos = contents.find(key);
+  ASSERT_NE(std::string::npos, pos);
+  contents.replace(pos, key.size(),
+                   "async_commit_wait_spin_us=3\n"
+                   "  async_commit_wait_yield_us=7");
+  const std::string legacy = dbname_ + "/legacy-options";
+  ASSERT_OK(WriteStringToFile(env_, contents, legacy));
+  DBOptions loaded;
+  std::vector<ColumnFamilyDescriptor> columns;
+  ASSERT_OK(LoadOptionsFromFile(legacy, env_, &loaded, &columns));
+  EXPECT_EQ(30U, loaded.async_commit_wait_spin_rounds);
+}
+
 TEST_F(AsyncCommitTest, PublicationWaitOptionsRoundTripAndValidation) {
   DBOptions parsed;
   ASSERT_OK(GetDBOptionsFromString(
       DBOptions(),
       "enable_async_commit=true;async_commit_wait_slots=1024;"
-      "async_commit_wait_spin_us=3;async_commit_wait_yield_us=7;",
+      "async_commit_wait_spin_rounds=64;",
       &parsed));
   Options options(parsed, ColumnFamilyOptions());
   options.create_if_missing = true;
@@ -47,8 +119,7 @@ TEST_F(AsyncCommitTest, PublicationWaitOptionsRoundTripAndValidation) {
     std::string text;
     ASSERT_OK(GetStringFromDBOptions(&text, candidate));
     EXPECT_NE(std::string::npos, text.find("async_commit_wait_slots=1024"));
-    EXPECT_NE(std::string::npos, text.find("async_commit_wait_spin_us=3"));
-    EXPECT_NE(std::string::npos, text.find("async_commit_wait_yield_us=7"));
+    EXPECT_NE(std::string::npos, text.find("async_commit_wait_spin_rounds=64"));
   }
   EXPECT_FALSE(db_->SetDBOptions({{"async_commit_wait_slots", "1"}}).ok());
   Close();

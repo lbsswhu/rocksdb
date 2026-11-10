@@ -1069,12 +1069,20 @@ struct DBOptions {
   // read waits and strong-visibility write waits. Range: [1, 1024]. Immutable.
   uint32_t async_commit_wait_slots = 32;
 
-  // Busy wait with CPU pause, then scheduler yield for these durations before
-  // blocking on a publication shard. Zero disables the corresponding phase.
-  // Uses elapsed steady-clock time; read deadlines remain in the DB clock.
-  // Immutable. Defaults: 10 us spin + 40 us yield.
-  uint64_t async_commit_wait_spin_us = 10;
-  uint64_t async_commit_wait_yield_us = 40;
+  // Maximum outer publication polls before blocking on a shard. Each failed
+  // poll uses the randomized CPU delay configured below. Zero skips spin.
+  // Applies to read waits and strong-visibility write waits. No time budget
+  // or OS scheduler yield. Immutable. Default: 30.
+  uint32_t async_commit_wait_spin_rounds = 30;
+
+  // Draw a thread-local pseudo-random delay in [0, delay) per spin round.
+  // Execute delay_sample * pause_multiplier consecutive CPU pauses before
+  // polling publication again. Zero delay or multiplier skips the delay.
+  // Without a read deadline the delay does not read a clock. Explicit
+  // deadlines interrupt long delays in chunks of at most 64 CPU pauses.
+  // Immutable. Ranges: delay [0, 1000], multiplier [0, 100]. Defaults: 6, 50.
+  uint32_t async_commit_wait_spin_delay = 6;
+  uint32_t async_commit_wait_spin_pause_multiplier = 50;
 
   // Bounds the additional group buffers/metadata retained by async commit.
   // Without a pool a single-request payload is borrowed. With a pool all

@@ -12,6 +12,7 @@
 #include <mutex>
 #include <thread>
 
+#include "db/async_commit_sequence_notifier.h"
 #include "db/db_test_util.h"
 #include "db/write_batch_internal.h"
 #include "db/write_thread.h"
@@ -93,6 +94,277 @@ class AsyncCommitExecutorTest : public DBTestBase,
     EXPECT_EQ(0U, bytes);
   }
 };
+
+// Blocking async WAL followers should not construct per-Writer wait objects.
+// This exercises a real three-writer group and verifies both final states and
+// removal of the old private-CV slow path. Restore BlockingAwaitState's old
+// branch to reproduce the two allocation assertions.
+TEST(AsyncWalStateWaitTest, SerialFollowersUseSharedBlockingWait) {
+  Options options;
+  options.enable_async_commit = true;
+  options.async_commit_memtable_threads = 1;
+  options.enable_write_thread_adaptive_yield = false;
+  WriteThread queue{ImmutableDBOptions(options)};
+  WriteBatch batches[3];
+  for (auto& batch : batches) ASSERT_OK(batch.Put("key", "value"));
+  WriteOptions writes;
+  WriteThread::Writer leader(writes, &batches[0], nullptr, 0, false);
+  WriteThread::Writer first(writes, &batches[1], nullptr, 0, false);
+  WriteThread::Writer second(writes, &batches[2], nullptr, 0, false);
+  PoolEvent blocking;
+  std::atomic<unsigned> blocked{0}, resumed{0};
+  auto* sp = SyncPoint::GetInstance();
+  sp->SetCallBack("WriteThread::AwaitState:BlockingWaiting", [&](void*) {
+    if (blocked.fetch_add(1) == 1) blocking.Set();
+  });
+  sp->SetCallBack("WriteThread::JoinBatchGroup:DoneWaiting", [&](void* arg) {
+    auto* writer = static_cast<WriteThread::Writer*>(arg);
+    EXPECT_FALSE(writer->made_waitable);
+    EXPECT_EQ(WriteThread::STATE_WAL_COMPLETED, writer->state.load());
+    resumed.fetch_add(1);
+  });
+  sp->EnableProcessing();
+  queue.JoinBatchGroup(&leader);
+  std::thread a([&] { queue.JoinBatchGroup(&first); });
+  std::thread b([&] { queue.JoinBatchGroup(&second); });
+  EXPECT_TRUE(blocking.Wait());
+  WriteThread::WriteGroup group;
+  queue.EnterAsBatchGroupLeader(&leader, &group);
+  EXPECT_EQ(3U, group.size);
+  queue.ExitAsyncWalGroup(group, Status::OK());
+  a.join();
+  b.join();
+  EXPECT_EQ(2U, resumed.load());
+  EXPECT_OK(first.FinalStatus());
+  EXPECT_OK(second.FinalStatus());
+  sp->DisableProcessing();
+  sp->ClearAllCallBacks();
+}
+
+// Complete before registration, after registration, and after the predicate
+// check. All three transitions must be observed even when no thread was in the
+// kernel at the moment of notification. Include terminal WAL errors.
+TEST(AsyncWalStateWaitTest, CompletionAcrossBlockingRegistration) {
+  for (const char* hook : {"WriteThread::AwaitState:BlockingWaiting",
+                           "WriteThread::AsyncWALWait:Registered",
+                           "WriteThread::AsyncWALWait:BeforeWait"}) {
+    for (bool fail : {false, true}) {
+      Options options;
+      options.enable_async_commit = true;
+      options.async_commit_memtable_threads = 1;
+      options.enable_write_thread_adaptive_yield = false;
+      WriteThread queue{ImmutableDBOptions(options)};
+      WriteBatch batch;
+      ASSERT_OK(batch.Put("key", "value"));
+      WriteOptions writes;
+      WriteThread::Writer leader(writes, &batch, nullptr, 0, false);
+      WriteThread::Writer follower(writes, &batch, nullptr, 0, false);
+      PoolEvent entered, resume;
+      auto* sp = SyncPoint::GetInstance();
+      sp->SetCallBack(hook, [&](void*) {
+        entered.Set();
+        EXPECT_TRUE(resume.Wait());
+      });
+      sp->EnableProcessing();
+      queue.JoinBatchGroup(&leader);
+      std::thread thread([&] { queue.JoinBatchGroup(&follower); });
+      EXPECT_TRUE(entered.Wait());
+      WriteThread::WriteGroup group;
+      queue.EnterAsBatchGroupLeader(&leader, &group);
+      EXPECT_EQ(2U, group.size);
+      queue.ExitAsyncWalGroup(group, fail ? Status::IOError("WAL failure")
+                                         : Status::OK());
+      resume.Set();
+      thread.join();
+      EXPECT_EQ(fail ? WriteThread::STATE_COMPLETED
+                     : WriteThread::STATE_WAL_COMPLETED,
+                follower.state.load());
+      EXPECT_EQ(fail, follower.FinalStatus().IsIOError());
+      sp->DisableProcessing();
+      sp->ClearAllCallBacks();
+    }
+  }
+}
+
+// The shared completion wake must not postpone the next leader until after
+// old followers are notified. This also exercises harmless wakes of followers
+// whose own completion predicate is not ready yet.
+TEST(AsyncWalStateWaitTest, NextLeaderRunsBeforeFollowerNotification) {
+  Options options;
+  options.enable_async_commit = true;
+  options.async_commit_memtable_threads = 1;
+  options.enable_write_thread_adaptive_yield = false;
+  WriteThread queue{ImmutableDBOptions(options)};
+  WriteBatch batch;
+  ASSERT_OK(batch.Put("key", "value"));
+  WriteOptions writes;
+  WriteThread::Writer leader(writes, &batch, nullptr, 0, false);
+  WriteThread::Writer follower(writes, &batch, nullptr, 0, false);
+  WriteThread::Writer next(writes, &batch, nullptr, 0, false);
+  PoolEvent blocked_follower, blocked_next, next_ready;
+  auto* sp = SyncPoint::GetInstance();
+  sp->SetCallBack("WriteThread::AwaitState:BlockingWaiting", [&](void* arg) {
+    if (arg == &follower) blocked_follower.Set();
+    if (arg == &next) blocked_next.Set();
+  });
+  sp->SetCallBack("WriteThread::NotifyAsyncFollowers:Before", [&](void*) {
+    EXPECT_TRUE(next_ready.Wait(std::chrono::seconds(1)));
+  });
+  sp->EnableProcessing();
+  queue.JoinBatchGroup(&leader);
+  std::thread first([&] { queue.JoinBatchGroup(&follower); });
+  EXPECT_TRUE(blocked_follower.Wait());
+  WriteThread::WriteGroup group;
+  queue.EnterAsBatchGroupLeader(&leader, &group);
+  EXPECT_EQ(2U, group.size);
+  std::thread second([&] {
+    queue.JoinBatchGroup(&next);
+    EXPECT_EQ(WriteThread::STATE_GROUP_LEADER, next.state.load());
+    next_ready.Set();
+  });
+  EXPECT_TRUE(blocked_next.Wait());
+  queue.ExitAsyncWalGroup(group, Status::OK());
+  first.join();
+  second.join();
+  sp->DisableProcessing();
+  sp->ClearAllCallBacks();
+  queue.EnterAsBatchGroupLeader(&next, &group);
+  queue.ExitAsyncWalGroup(group, Status::OK());
+}
+
+// A completed prefix must become visible before the rest of a large lease
+// finishes. Hold the worker on group 1 while building a deterministic backlog,
+// then hold the last group of the following lease after earlier groups applied.
+TEST_P(AsyncCommitExecutorTest, SerialWorkerPublishesBeforeLeaseFinishes) {
+  Options options = PoolOptions();
+  options.async_commit_memtable_threads = 1;
+  options.allow_concurrent_memtable_write = false;
+  Reopen(options);
+  PoolEvent first, release_first, last, release_last;
+  auto* sp = SyncPoint::GetInstance();
+  sp->SetCallBack("DBImpl::AsyncWriteImpl:BeforeRange", [&](void* arg) {
+    const auto sequence = *static_cast<SequenceNumber*>(arg);
+    if (sequence == 1) {
+      first.Set();
+      EXPECT_TRUE(release_first.Wait());
+    } else if (sequence == 17) {
+      last.Set();
+      EXPECT_TRUE(release_last.Wait());
+    }
+  });
+  sp->EnableProcessing();
+  EXPECT_OK(db_->Put(Writes(), "key1", "value1"));
+  EXPECT_TRUE(first.Wait());
+  for (unsigned i = 2; i <= 17; ++i) {
+    EXPECT_OK(db_->Put(Writes(), "key" + std::to_string(i),
+                       "value" + std::to_string(i)));
+  }
+  release_first.Set();
+  EXPECT_TRUE(last.Wait());
+  EXPECT_GE(db_->GetLatestSequenceNumber(), 9U);
+  release_last.Set();
+  EXPECT_OK(dbfull()->WaitForAsyncCommit());
+  EXPECT_EQ(17U, db_->GetLatestSequenceNumber());
+  ExpectDrained();
+  sp->DisableProcessing();
+  sp->ClearAllCallBacks();
+  EXPECT_EQ("value2", Get("key2"));
+  EXPECT_EQ("value17", Get("key17"));
+}
+
+TEST_P(AsyncCommitExecutorTest, SerialOwnedGroupUsesOneQueueNode) {
+  Options options = PoolOptions();
+  options.async_commit_memtable_threads = 1;
+  options.allow_concurrent_memtable_write = false;
+  Reopen(options);
+  WriteBatch first(0, 0, 8), second(0, 0, 8), metadata(0, 0, 8);
+  ASSERT_OK(first.Put("first", "one"));
+  ASSERT_OK(WriteBatchInternal::Put(&second, 99999, "missing", "ignored"));
+  ASSERT_OK(second.Put("second", "two"));
+  metadata.PutLogData("metadata");
+  PoolEvent forming, form, followers, applying, apply;
+  std::atomic<unsigned> queued{0};
+  auto* sp = SyncPoint::GetInstance();
+  sp->SetCallBack("DBImpl::AsyncWriteImpl:BeforeGroup", [&](void*) {
+    forming.Set();
+    EXPECT_TRUE(form.Wait());
+  });
+  sp->SetCallBack("WriteThread::JoinBatchGroup:Wait", [&](void* arg) {
+    auto* writer = static_cast<WriteThread::Writer*>(arg);
+    if (writer->state.load() != WriteThread::STATE_GROUP_LEADER &&
+        queued.fetch_add(1) == 1)
+      followers.Set();
+  });
+  sp->SetCallBack("DBImpl::AsyncWriteImpl:BeforeApply", [&](void*) {
+    applying.Set();
+    EXPECT_TRUE(apply.Wait());
+  });
+  sp->EnableProcessing();
+  std::thread leader([&] {
+    WriteOptions writes = Writes();
+    writes.memtable_insert_hint_per_batch = false;
+    EXPECT_OK(db_->Write(writes, &first));
+  });
+  EXPECT_TRUE(forming.Wait());
+  std::thread follower([&] {
+    WriteOptions writes = Writes();
+    writes.ignore_missing_column_families = true;
+    EXPECT_OK(db_->Write(writes, &second));
+  });
+  std::thread empty([&] { EXPECT_OK(db_->Write(Writes(), &metadata)); });
+  EXPECT_TRUE(followers.Wait());
+  form.Set();
+  EXPECT_TRUE(applying.Wait());
+  leader.join();
+  follower.join();
+  empty.join();
+  // Returning callers can reuse all their buffers before the worker inserts.
+  first.Clear();
+  second.Clear();
+  metadata.Clear();
+  // This is an outstanding-node gauge, not a cumulative allocation counter.
+  // Sample while BeforeApply still pins the worker, before idle reclamation.
+  uint64_t retired = 0;
+  EXPECT_TRUE(db_->GetIntProperty("rocksdb.async-commit-executor-retired-nodes",
+                                 &retired));
+  EXPECT_EQ(1U, retired);
+  apply.Set();
+  EXPECT_OK(dbfull()->WaitForAsyncCommit());
+  uint64_t submitted = 0, ranges = 0;
+  EXPECT_TRUE(db_->GetIntProperty("rocksdb.async-commit-executor-submitted-groups",
+                                 &submitted));
+  EXPECT_TRUE(db_->GetIntProperty("rocksdb.async-commit-executor-lease-ranges",
+                                 &ranges));
+  EXPECT_EQ(1U, submitted);
+  EXPECT_EQ(3U, ranges);
+  EXPECT_EQ(3U, db_->GetLatestSequenceNumber());
+  ExpectDrained();
+  sp->DisableProcessing();
+  sp->ClearAllCallBacks();
+  EXPECT_EQ("one", Get("first"));
+  EXPECT_EQ("two", Get("second"));
+}
+
+// Moving the serial Schedule check into reference retirement must still make
+// ordinary foreground writes switch full memtables without an explicit Flush.
+TEST_P(AsyncCommitExecutorTest, SerialWorkerSchedulesAutomaticFlush) {
+  Options options = PoolOptions();
+  options.async_commit_memtable_threads = 1;
+  options.allow_concurrent_memtable_write = false;
+  options.write_buffer_size = 65536;
+  options.max_write_buffer_number = 4;
+  options.disable_auto_compactions = true;
+  Reopen(options);
+  for (unsigned i = 0; i < 100; ++i) {
+    EXPECT_OK(db_->Put(Writes(), "key" + std::to_string(i),
+                       std::string(4096, 'v')));
+    if (i % 10 == 9) EXPECT_OK(dbfull()->WaitForAsyncCommit());
+  }
+  EXPECT_OK(dbfull()->WaitForAsyncCommit());
+  EXPECT_OK(dbfull()->TEST_WaitForFlushMemTable());
+  EXPECT_GT(NumTableFilesAtLevel(0), 0);
+  ExpectDrained();
+}
 
 // A reader with no preceding write must still wait for writes allocated before
 // its entry. Keeping the old thread-local-only target makes this fail.
@@ -183,7 +455,7 @@ TEST_P(AsyncCommitExecutorTest, ReadTargetDoesNotChaseLaterAllocations) {
   EXPECT_TRUE(second.Wait());
   // With multiple workers the second task may start before P reaches 1.
   PoolEvent published;
-  sp->SetCallBack("DBImpl::NotifyAsyncCommitPublication:BeforeSlotLock",
+  sp->SetCallBack("DBImpl::SignalAsyncCommitPublication:Published",
                   [&](void*) { published.Set(); });
   if (db_->GetLatestSequenceNumber() < 1) {
     EXPECT_TRUE(published.Wait());
@@ -196,12 +468,357 @@ TEST_P(AsyncCommitExecutorTest, ReadTargetDoesNotChaseLaterAllocations) {
   sp->ClearAllCallBacks();
 }
 
+// Slow reader wakeups must not prevent subsequent memtable publication.
+TEST_P(AsyncCommitExecutorTest,
+       WorkerContinuesWhilePublicationNotificationIsBlocked) {
+  Options options = PoolOptions();
+  options.async_commit_wait_spin_rounds = 0;
+  Reopen(options);
+  PoolEvent applying, release_apply, waiting, notifying, release_notify;
+  PoolEvent next_applied;
+  std::atomic<unsigned> applies{0};
+  std::atomic<bool> blocked{false};
+  auto* sp = SyncPoint::GetInstance();
+  sp->SetCallBack("DBImpl::AsyncWriteImpl:BeforeApply", [&](void*) {
+    if (applies.fetch_add(1) == 0) {
+      applying.Set();
+      EXPECT_TRUE(release_apply.Wait());
+    } else {
+      next_applied.Set();
+    }
+  });
+  sp->SetCallBack("DBImpl::WaitForAsyncCommitSequence:BeforeWait",
+                  [&](void*) { waiting.Set(); });
+  sp->SetCallBack("DBImpl::NotifyAsyncCommitPublication:BeforeSlotLock",
+                  [&](void*) {
+                    if (!blocked.exchange(true)) {
+                      notifying.Set();
+                      EXPECT_TRUE(release_notify.Wait());
+                    }
+                  });
+  sp->EnableProcessing();
+  EXPECT_OK(db_->Put(Writes(), "first", "value"));
+  EXPECT_TRUE(applying.Wait());
+  std::thread reader([&] {
+    ReadOptions read;
+    read.deadline = std::chrono::microseconds(env_->NowMicros() + 5000000);
+    std::string value;
+    EXPECT_OK(db_->Get(read, "first", &value));
+    EXPECT_EQ("value", value);
+  });
+  EXPECT_TRUE(waiting.Wait());
+  release_apply.Set();
+  EXPECT_TRUE(notifying.Wait());
+  EXPECT_OK(db_->Put(Writes(), "second", "next"));
+  // In the old implementation a single worker is stuck in the first group's
+  // notification, so this real second insertion cannot start.
+  EXPECT_TRUE(next_applied.Wait(std::chrono::milliseconds(500)));
+  release_notify.Set();
+  reader.join();
+  EXPECT_OK(dbfull()->WaitForAsyncCommit());
+  EXPECT_EQ(2U, db_->GetLatestSequenceNumber());
+  EXPECT_EQ("next", Get("second"));
+  sp->DisableProcessing();
+  sp->ClearAllCallBacks();
+}
+
+// The last publication can occur after the epoch snapshot or immediately
+// before the actual futex wait. No later Put may be needed to wake the reader.
+TEST_P(AsyncCommitExecutorTest, NotifierProgressBeforeSleepIsNotLost) {
+  for (const char* point :
+       {"AsyncCommitSequenceNotifier::Run:ProgressRegistered",
+        "AsyncCommitSequenceNotifier::Run:BeforeProgressWait"}) {
+    Options options = PoolOptions();
+    options.async_commit_wait_spin_rounds = 0;
+    Reopen(options);
+    PoolEvent applying, release_apply, registered, resume, read_done;
+    std::atomic<bool> blocked{false};
+    auto* sp = SyncPoint::GetInstance();
+    sp->SetCallBack("DBImpl::AsyncWriteImpl:BeforeApply", [&](void*) {
+      applying.Set();
+      EXPECT_TRUE(release_apply.Wait());
+    });
+    sp->SetCallBack(point, [&](void*) {
+      if (!blocked.exchange(true)) {
+        registered.Set();
+        EXPECT_TRUE(resume.Wait());
+      }
+    });
+    sp->EnableProcessing();
+    EXPECT_OK(db_->Put(Writes(), "key", "value"));
+    EXPECT_TRUE(applying.Wait());
+    std::thread reader([&] {
+      ReadOptions read;
+      read.deadline = std::chrono::microseconds(env_->NowMicros() + 5000000);
+      std::string value;
+      EXPECT_OK(db_->Get(read, "key", &value));
+      EXPECT_EQ("value", value);
+      read_done.Set();
+    });
+    EXPECT_TRUE(registered.Wait());
+    release_apply.Set();
+    EXPECT_OK(dbfull()->WaitForAsyncCommit());
+    resume.Set();
+    EXPECT_TRUE(read_done.Wait(std::chrono::milliseconds(500)));
+    reader.join();
+    sp->DisableProcessing();
+    sp->ClearAllCallBacks();
+  }
+}
+
+// A first waiter must activate the notifier even if P advanced after the
+// notifier's zero-waiter observation. Skipping that interval loses this wakeup.
+TEST_P(AsyncCommitExecutorTest, FirstWaiterActivatesIdleNotifier) {
+  for (const char* point :
+       {"AsyncCommitSequenceNotifier::Run:IdleRegistered",
+        "AsyncCommitSequenceNotifier::Run:BeforeIdleWait"}) {
+    Options options = PoolOptions();
+    options.async_commit_wait_spin_rounds = 0;
+    Close();
+    PoolEvent idle, resume, applying, release_apply, waiting, read_done;
+    std::atomic<bool> blocked{false};
+    auto* sp = SyncPoint::GetInstance();
+    sp->SetCallBack(point, [&](void*) {
+      if (!blocked.exchange(true)) {
+        idle.Set();
+        EXPECT_TRUE(resume.Wait());
+      }
+    });
+    sp->SetCallBack("DBImpl::AsyncWriteImpl:BeforeApply", [&](void*) {
+      applying.Set();
+      EXPECT_TRUE(release_apply.Wait());
+    });
+    sp->SetCallBack("DBImpl::WaitForAsyncCommitSequence:BeforeWait",
+                    [&](void*) { waiting.Set(); });
+    sp->EnableProcessing();
+    Reopen(options);
+    EXPECT_TRUE(idle.Wait());
+    EXPECT_OK(db_->Put(Writes(), "key", "value"));
+    EXPECT_TRUE(applying.Wait());
+    std::thread reader([&] {
+      ReadOptions read;
+      read.deadline = std::chrono::microseconds(env_->NowMicros() + 5000000);
+      std::string value;
+      EXPECT_OK(db_->Get(read, "key", &value));
+      EXPECT_EQ("value", value);
+      read_done.Set();
+    });
+    EXPECT_TRUE(waiting.Wait());
+    release_apply.Set();
+    EXPECT_OK(dbfull()->WaitForAsyncCommit());
+    resume.Set();
+    EXPECT_TRUE(read_done.Wait(std::chrono::milliseconds(500)));
+    reader.join();
+    sp->DisableProcessing();
+    sp->ClearAllCallBacks();
+  }
+}
+
+// P advances by a full slot cycle while the notifier services its old snapshot.
+// Advancing N to a fresh P at the end, or treating equal modulo slots as an
+// empty interval, leaves the reader of sequence 2 asleep.
+TEST_P(AsyncCommitExecutorTest, NotifierKeepsSnapshotAcrossSlotCycle) {
+  Options options = PoolOptions();
+  options.async_commit_wait_slots = 3;
+  options.async_commit_wait_spin_rounds = 0;
+  DestroyAndReopen(options);
+  PoolEvent first_apply, release_first, second_apply, release_second;
+  PoolEvent first_wait, second_wait, notifying, resume, second_done;
+  std::atomic<bool> blocked{false};
+  auto* sp = SyncPoint::GetInstance();
+  sp->SetCallBack("DBImpl::AsyncWriteImpl:BeforeApply", [&](void* arg) {
+    const auto sequence =
+        WriteBatchInternal::Sequence(static_cast<WriteBatch*>(arg));
+    if (sequence == 1) {
+      first_apply.Set();
+      EXPECT_TRUE(release_first.Wait());
+    } else if (sequence == 2) {
+      second_apply.Set();
+      EXPECT_TRUE(release_second.Wait());
+    }
+  });
+  sp->SetCallBack("DBImpl::WaitForAsyncCommitSequence:BeforeWait",
+                  [&](void* arg) {
+                    if (*static_cast<uint32_t*>(arg) == 1) first_wait.Set();
+                    if (*static_cast<uint32_t*>(arg) == 2) second_wait.Set();
+                  });
+  sp->SetCallBack("DBImpl::NotifyAsyncCommitPublication:BeforeSlotLock",
+                  [&](void*) {
+                    if (!blocked.exchange(true)) {
+                      notifying.Set();
+                      EXPECT_TRUE(resume.Wait());
+                    }
+                  });
+  sp->EnableProcessing();
+  EXPECT_OK(db_->Put(Writes(), "first", "one"));
+  EXPECT_TRUE(first_apply.Wait());
+  auto read = [&](const char* key, const char* expected) {
+    ReadOptions ro;
+    ro.deadline = std::chrono::microseconds(env_->NowMicros() + 5000000);
+    std::string value;
+    EXPECT_OK(db_->Get(ro, key, &value));
+    EXPECT_EQ(expected, value);
+  };
+  std::thread first([&] { read("first", "one"); });
+  EXPECT_TRUE(first_wait.Wait());
+  release_first.Set();
+  EXPECT_TRUE(notifying.Wait());
+  EXPECT_OK(db_->Put(Writes(), "second", "two"));
+  EXPECT_TRUE(second_apply.Wait());
+  std::thread second([&] {
+    read("second", "two");
+    second_done.Set();
+  });
+  EXPECT_TRUE(second_wait.Wait());
+  release_second.Set();
+  EXPECT_OK(dbfull()->WaitForAsyncCommit());
+  WriteBatch batch;
+  EXPECT_OK(batch.Put("third", "three"));
+  EXPECT_OK(batch.Put("fourth", "four"));
+  EXPECT_OK(db_->Write(Writes(), &batch));
+  EXPECT_OK(dbfull()->WaitForAsyncCommit());
+  EXPECT_EQ(4U, db_->GetLatestSequenceNumber());
+  resume.Set();
+  EXPECT_TRUE(second_done.Wait(std::chrono::milliseconds(500)));
+  first.join();
+  second.join();
+  sp->DisableProcessing();
+  sp->ClearAllCallBacks();
+}
+
+TEST_P(AsyncCommitExecutorTest,
+       WeakWritesLeaveNotifierIdleAndTimeoutReturnsToIdle) {
+  Options options = PoolOptions();
+  options.async_commit_wait_spin_rounds = 0;
+  Close();
+  PoolEvent idle, idle_again, applying, release_apply;
+  std::atomic<unsigned> idles{0}, scans{0}, progress_waits{0};
+  auto* sp = SyncPoint::GetInstance();
+  sp->SetCallBack("AsyncCommitSequenceNotifier::Run:IdleRegistered",
+                  [&](void*) {
+                    if (idles.fetch_add(1) == 0)
+                      idle.Set();
+                    else
+                      idle_again.Set();
+                  });
+  sp->SetCallBack("DBImpl::NotifyAsyncCommitPublication:BeforeSlotLock",
+                  [&](void*) { ++scans; });
+  sp->SetCallBack("AsyncCommitSequenceNotifier::Run:ProgressRegistered",
+                  [&](void*) { ++progress_waits; });
+  sp->EnableProcessing();
+  Reopen(options);
+  EXPECT_TRUE(idle.Wait());
+  for (unsigned i = 0; i < 16; ++i)
+    EXPECT_OK(db_->Put(Writes(), "key", "value"));
+  EXPECT_OK(dbfull()->WaitForAsyncCommit());
+  EXPECT_EQ(0U, scans.load());
+  EXPECT_EQ(0U, progress_waits.load());
+  sp->SetCallBack("DBImpl::AsyncWriteImpl:BeforeApply", [&](void*) {
+    applying.Set();
+    EXPECT_TRUE(release_apply.Wait());
+  });
+  EXPECT_OK(db_->Put(Writes(), "pending", "next"));
+  EXPECT_TRUE(applying.Wait());
+  ReadOptions ro;
+  ro.deadline = std::chrono::microseconds(env_->NowMicros() + 10000);
+  std::string value;
+  EXPECT_TRUE(db_->Get(ro, "pending", &value).IsTimedOut());
+  EXPECT_TRUE(idle_again.Wait(std::chrono::milliseconds(500)));
+  release_apply.Set();
+  EXPECT_OK(dbfull()->WaitForAsyncCommit());
+  EXPECT_EQ("next", Get("pending"));
+  sp->DisableProcessing();
+  sp->ClearAllCallBacks();
+}
+
+// Exercise both event sleep locations with the real Stop/Join protocol. There
+// need not be another P advance or waiter transition to terminate the thread.
+TEST_P(AsyncCommitExecutorTest, NotifierStopWakesBothEvents) {
+  Reopen(PoolOptions());
+  for (bool waiting : {false, true}) {
+    AsyncCommitSequenceNotifier notifier(dbfull());
+    if (waiting) notifier.RegisterWaiter();
+    PoolEvent sleeping, stopped;
+    auto* sp = SyncPoint::GetInstance();
+    sp->SetCallBack(waiting
+                        ? "AsyncCommitSequenceNotifier::Run:BeforeProgressWait"
+                        : "AsyncCommitSequenceNotifier::Run:BeforeIdleWait",
+                    [&](void* arg) {
+                      if (arg == &notifier) sleeping.Set();
+                    });
+    sp->EnableProcessing();
+    notifier.Start(db_->GetLatestSequenceNumber());
+    EXPECT_TRUE(sleeping.Wait());
+    std::thread stop([&] {
+      notifier.Stop();
+      stopped.Set();
+    });
+    EXPECT_TRUE(stopped.Wait(std::chrono::milliseconds(500)));
+    // Ensure cleanup even if Stop fails to signal one of its events.
+    if (waiting)
+      notifier.PublicationAdvanced();
+    else {
+      notifier.RegisterWaiter();
+      notifier.UnregisterWaiter();
+    }
+    stop.join();
+    if (waiting) notifier.UnregisterWaiter();
+    sp->DisableProcessing();
+    sp->ClearAllCallBacks();
+  }
+}
+
+TEST_P(AsyncCommitExecutorTest, WorkerZeroDoesNotWaitForReaderNotification) {
+  Options options = PoolOptions();
+  options.async_commit_memtable_threads = 0;
+  options.async_commit_wait_spin_rounds = 0;
+  Reopen(options);
+  PoolEvent applying, release_apply, waiting, notifying, resume, writer_done;
+  std::atomic<bool> blocked{false};
+  auto* sp = SyncPoint::GetInstance();
+  sp->SetCallBack("DBImpl::AsyncWriteImpl:BeforeApply", [&](void*) {
+    applying.Set();
+    EXPECT_TRUE(release_apply.Wait());
+  });
+  sp->SetCallBack("DBImpl::WaitForAsyncCommitSequence:BeforeWait",
+                  [&](void*) { waiting.Set(); });
+  sp->SetCallBack("DBImpl::NotifyAsyncCommitPublication:BeforeSlotLock",
+                  [&](void*) {
+                    if (!blocked.exchange(true)) {
+                      notifying.Set();
+                      EXPECT_TRUE(resume.Wait());
+                    }
+                  });
+  sp->EnableProcessing();
+  std::thread writer([&] {
+    EXPECT_OK(db_->Put(Writes(), "key", "value"));
+    writer_done.Set();
+  });
+  EXPECT_TRUE(applying.Wait());
+  std::thread reader([&] {
+    ReadOptions ro;
+    ro.deadline = std::chrono::microseconds(env_->NowMicros() + 5000000);
+    std::string value;
+    EXPECT_OK(db_->Get(ro, "key", &value));
+    EXPECT_EQ("value", value);
+  });
+  EXPECT_TRUE(waiting.Wait());
+  release_apply.Set();
+  EXPECT_TRUE(notifying.Wait());
+  EXPECT_TRUE(writer_done.Wait(std::chrono::milliseconds(500)));
+  resume.Set();
+  writer.join();
+  reader.join();
+  EXPECT_OK(dbfull()->WaitForAsyncCommit());
+  sp->DisableProcessing();
+  sp->ClearAllCallBacks();
+}
+
 // Publishing between a reader's unlocked check and its slot lock must not
 // strand it, even when the publisher sees no registered waiters.
 TEST_P(AsyncCommitExecutorTest, PublicationBeforeSlotLockIsNotLost) {
   Options options = PoolOptions();
-  options.async_commit_wait_spin_us = 0;
-  options.async_commit_wait_yield_us = 0;
+  options.async_commit_wait_spin_rounds = 0;
   Reopen(options);
   PoolEvent applying, release, before_lock, resume;
   auto* sp = SyncPoint::GetInstance();
@@ -237,8 +854,7 @@ TEST_P(AsyncCommitExecutorTest, PublicationBeforeSlotLockIsNotLost) {
 // loading a waiter count without a handshake loses this notification.
 TEST_P(AsyncCommitExecutorTest, PublicationBetweenPredicateAndSleepIsNotLost) {
   Options options = PoolOptions();
-  options.async_commit_wait_spin_us = 0;
-  options.async_commit_wait_yield_us = 0;
+  options.async_commit_wait_spin_rounds = 0;
   Reopen(options);
   PoolEvent applying, release, before_wait, resume, notifying;
   auto* sp = SyncPoint::GetInstance();
@@ -272,37 +888,116 @@ TEST_P(AsyncCommitExecutorTest, PublicationBetweenPredicateAndSleepIsNotLost) {
   sp->ClearAllCallBacks();
 }
 
-TEST_P(AsyncCommitExecutorTest, SpinAndYieldCanFinishWithoutBlocking) {
-  for (bool spin : {true, false}) {
+// A publication/error during a delay is observed at the next outer poll.
+// This distinguishes grouped delay from checking P after every PAUSE.
+TEST_P(AsyncCommitExecutorTest, RandomSpinDelayGroupsPauses) {
+  for (bool fail : {false, true}) {
     Options options = PoolOptions();
-    options.async_commit_wait_spin_us = spin ? 10000000 : 0;
-    options.async_commit_wait_yield_us = spin ? 0 : 10000000;
-    Reopen(options);
+    DBOptions parsed;
+    ASSERT_OK(GetDBOptionsFromString(
+        options,
+        "async_commit_wait_spin_rounds=4294967295;"
+        "async_commit_wait_spin_delay=2;"
+        "async_commit_wait_spin_pause_multiplier=4;", &parsed));
+    static_cast<DBOptions&>(options) = parsed;
+    DestroyAndReopen(options);
     PoolEvent applying, release;
-    std::atomic<unsigned> busy{0}, blocked{0};
+    unsigned rounds = 0, pauses = 0, blocked = 0;
     auto* sp = SyncPoint::GetInstance();
     sp->SetCallBack("DBImpl::AsyncWriteImpl:BeforeApply", [&](void*) {
       applying.Set();
       EXPECT_TRUE(release.Wait());
     });
-    sp->SetCallBack(spin ? "DBImpl::WaitForAsyncCommitSequence:Spin"
-                         : "DBImpl::WaitForAsyncCommitSequence:Yield",
-                    [&](void*) {
-                      ++busy;
-                      release.Set();
-                    });
+    if (fail) {
+      sp->SetCallBack("DBImpl::AsyncWriteImpl:ApplyStatus", [&](void* arg) {
+        *static_cast<Status*>(arg) = Status::IOError("spin delay apply failure");
+      });
+    }
+    sp->SetCallBack("DBImpl::PrepareAsyncCommitRead:Wait", [&](void*) {
+      Random::GetTLSInstance()->Reset(1);  // First Uniform(2) is 1.
+    });
+    sp->SetCallBack("DBImpl::WaitForAsyncCommitSequence:Spin", [&](void* arg) {
+      ++rounds;
+      EXPECT_EQ(4U, *static_cast<uint32_t*>(arg));
+    });
+    sp->SetCallBack("DBImpl::WaitForAsyncCommitSequence:Pause", [&](void*) {
+      if (++pauses == 1) {
+        release.Set();
+        Status status = dbfull()->WaitForAsyncCommit();
+        if (fail) EXPECT_TRUE(status.IsIOError());
+        else EXPECT_OK(status);
+      }
+    });
     sp->SetCallBack("DBImpl::WaitForAsyncCommitSequence:BeforeWait",
                     [&](void*) { ++blocked; });
     sp->EnableProcessing();
     EXPECT_OK(db_->Put(Writes(), "key", "value"));
     EXPECT_TRUE(applying.Wait());
-    ReadOptions read;
-    read.deadline = std::chrono::microseconds(env_->NowMicros() + 5000000);
     std::string value;
-    EXPECT_OK(db_->Get(read, "key", &value));
+    Status status = db_->Get(ReadOptions(), "key", &value);
+    if (fail) EXPECT_TRUE(status.IsIOError());
+    else {
+      EXPECT_OK(status);
+      EXPECT_EQ("value", value);
+    }
+    EXPECT_EQ(1U, rounds);
+    EXPECT_EQ(4U, pauses);
+    EXPECT_EQ(0U, blocked);
+    release.Set();
+    sp->DisableProcessing();
+    sp->ClearAllCallBacks();
+    if (fail) EXPECT_TRUE(db_->Close().IsIOError());
+  }
+}
+
+TEST_P(AsyncCommitExecutorTest, RandomSpinDelayRangeAndZeroSettings) {
+  for (const auto& setting : {std::make_pair(6U, 50U),
+                              std::make_pair(0U, 50U),
+                              std::make_pair(1U, 50U),
+                              std::make_pair(6U, 0U)}) {
+    Options options = PoolOptions();
+    DBOptions parsed;
+    ASSERT_OK(GetDBOptionsFromString(
+        options, "async_commit_wait_spin_rounds=3;async_commit_wait_spin_delay=" +
+                     std::to_string(setting.first) +
+                     ";async_commit_wait_spin_pause_multiplier=" +
+                     std::to_string(setting.second), &parsed));
+    static_cast<DBOptions&>(options) = parsed;
+    Reopen(options);
+    PoolEvent applying, release;
+    Random expected(1);
+    unsigned rounds = 0, pauses = 0, expected_total = 0;
+    auto* sp = SyncPoint::GetInstance();
+    sp->SetCallBack("DBImpl::AsyncWriteImpl:BeforeApply", [&](void*) {
+      applying.Set();
+      EXPECT_TRUE(release.Wait());
+    });
+    sp->SetCallBack("DBImpl::PrepareAsyncCommitRead:Wait", [&](void*) {
+      Random::GetTLSInstance()->Reset(1);
+    });
+    sp->SetCallBack("DBImpl::WaitForAsyncCommitSequence:Spin", [&](void* arg) {
+      EXPECT_EQ(expected_total, pauses);  // Previous delay actually finished.
+      ++rounds;
+      const unsigned n = setting.first && setting.second
+          ? expected.Uniform(setting.first) * setting.second : 0;
+      EXPECT_EQ(n, *static_cast<uint32_t*>(arg));
+      expected_total += n;
+    });
+    sp->SetCallBack("DBImpl::WaitForAsyncCommitSequence:Pause",
+                    [&](void*) { ++pauses; });
+    sp->SetCallBack("DBImpl::WaitForAsyncCommitSequence:BeforeWait", [&](void*) {
+      EXPECT_EQ(3U, rounds);
+      EXPECT_EQ(expected_total, pauses);
+      release.Set();
+    });
+    sp->EnableProcessing();
+    EXPECT_OK(db_->Put(Writes(), "key", "value"));
+    EXPECT_TRUE(applying.Wait());
+    std::string value;
+    EXPECT_OK(db_->Get(ReadOptions(), "key", &value));
     EXPECT_EQ("value", value);
-    EXPECT_GT(busy.load(), 0U);
-    EXPECT_EQ(0U, blocked.load());
+    EXPECT_EQ(3U, rounds);
+    EXPECT_EQ(expected_total, pauses);
     release.Set();
     EXPECT_OK(dbfull()->WaitForAsyncCommit());
     sp->DisableProcessing();
@@ -310,18 +1005,151 @@ TEST_P(AsyncCommitExecutorTest, SpinAndYieldCanFinishWithoutBlocking) {
   }
 }
 
-TEST_P(AsyncCommitExecutorTest, BusyPublicationWaitHonorsDeadline) {
-  for (bool spin : {true, false}) {
+TEST_P(AsyncCommitExecutorTest, RandomSpinDelayDeadlineInterruptsInnerLoop) {
+  Options options = PoolOptions();
+  DBOptions parsed;
+  ASSERT_OK(GetDBOptionsFromString(
+      options, "async_commit_wait_spin_rounds=4294967295;"
+               "async_commit_wait_spin_delay=1000;"
+               "async_commit_wait_spin_pause_multiplier=100;", &parsed));
+  static_cast<DBOptions&>(options) = parsed;
+  SetTimeElapseOnlySleepOnReopen(&options);
+  Reopen(options);
+  PoolEvent applying, release;
+  unsigned rounds = 0, pauses = 0, blocked = 0;
+  auto* sp = SyncPoint::GetInstance();
+  sp->SetCallBack("DBImpl::AsyncWriteImpl:BeforeApply", [&](void*) {
+    applying.Set();
+    EXPECT_TRUE(release.Wait());
+  });
+  sp->SetCallBack("DBImpl::PrepareAsyncCommitRead:Wait", [&](void*) {
+    Random::GetTLSInstance()->Reset(1);  // Delay is 80700 PAUSEs.
+  });
+  sp->SetCallBack("DBImpl::WaitForAsyncCommitSequence:Spin",
+                  [&](void*) { ++rounds; });
+  sp->SetCallBack("DBImpl::WaitForAsyncCommitSequence:Pause", [&](void*) {
+    if (++pauses == 1) env_->MockSleepForMicroseconds(10000000);
+  });
+  sp->SetCallBack("DBImpl::WaitForAsyncCommitSequence:BeforeWait",
+                  [&](void*) { ++blocked; });
+  sp->EnableProcessing();
+  EXPECT_OK(db_->Put(Writes(), "key", "value"));
+  EXPECT_TRUE(applying.Wait());
+  ReadOptions read;
+  read.deadline = std::chrono::microseconds(env_->NowMicros() + 5000000);
+  std::string value;
+  EXPECT_TRUE(db_->Get(read, "key", &value).IsTimedOut());
+  EXPECT_EQ(1U, rounds);
+  EXPECT_EQ(64U, pauses);
+  EXPECT_EQ(0U, blocked);
+  release.Set();
+  EXPECT_OK(dbfull()->WaitForAsyncCommit());
+  sp->DisableProcessing();
+  sp->ClearAllCallBacks();
+}
+
+TEST_P(AsyncCommitExecutorTest, CountedSpinCanFinishWithoutBlocking) {
+  for (uint32_t rounds : {1U, 64U, 200U}) {
+    for (uint32_t publish_at : {1U, rounds}) {
+      Options options = PoolOptions();
+      DBOptions parsed;
+      ASSERT_OK(GetDBOptionsFromString(
+          options, "async_commit_wait_spin_rounds=" + std::to_string(rounds),
+          &parsed));
+      static_cast<DBOptions&>(options) = parsed;
+      Reopen(options);
+      PoolEvent applying, release;
+      unsigned busy = 0, blocked = 0;
+      auto* sp = SyncPoint::GetInstance();
+      sp->SetCallBack("DBImpl::AsyncWriteImpl:BeforeApply", [&](void*) {
+        applying.Set();
+        EXPECT_TRUE(release.Wait());
+      });
+      sp->SetCallBack("DBImpl::WaitForAsyncCommitSequence:Spin", [&](void*) {
+        if (++busy == publish_at) {
+          release.Set();
+          // Publication is complete before this iteration's pause finishes.
+          EXPECT_OK(dbfull()->WaitForAsyncCommit());
+        }
+      });
+      sp->SetCallBack("DBImpl::WaitForAsyncCommitSequence:BeforeWait",
+                      [&](void*) { ++blocked; });
+      sp->EnableProcessing();
+      EXPECT_OK(db_->Put(Writes(), "key", "value"));
+      EXPECT_TRUE(applying.Wait());
+      std::string value;
+      EXPECT_OK(db_->Get(ReadOptions(), "key", &value));
+      EXPECT_EQ("value", value);
+      EXPECT_EQ(publish_at, busy);
+      EXPECT_EQ(0U, blocked);
+      release.Set();
+      EXPECT_OK(dbfull()->WaitForAsyncCommit());
+      sp->DisableProcessing();
+      sp->ClearAllCallBacks();
+    }
+  }
+}
+
+TEST_P(AsyncCommitExecutorTest, CountedSpinExhaustionEntersCV) {
+  for (uint32_t rounds : {0U, 1U, 64U, 200U, 1000U}) {
     Options options = PoolOptions();
-    options.async_commit_wait_spin_us = spin ? 10000000 : 0;
-    options.async_commit_wait_yield_us = spin ? 0 : 10000000;
+    DBOptions parsed;
+    ASSERT_OK(GetDBOptionsFromString(
+        options, "async_commit_wait_spin_rounds=" + std::to_string(rounds),
+        &parsed));
+    static_cast<DBOptions&>(options) = parsed;
     Reopen(options);
     PoolEvent applying, release;
-    std::atomic<unsigned> blocked{0};
+    unsigned busy = 0, blocked = 0;
     auto* sp = SyncPoint::GetInstance();
     sp->SetCallBack("DBImpl::AsyncWriteImpl:BeforeApply", [&](void*) {
       applying.Set();
       EXPECT_TRUE(release.Wait());
+    });
+    sp->SetCallBack("DBImpl::WaitForAsyncCommitSequence:Spin",
+                    [&](void*) { ++busy; });
+    sp->SetCallBack("DBImpl::WaitForAsyncCommitSequence:BeforeWait", [&](void*) {
+      ++blocked;
+      EXPECT_EQ(rounds, busy);
+      release.Set();
+    });
+    sp->EnableProcessing();
+    EXPECT_OK(db_->Put(Writes(), "key", "value"));
+    EXPECT_TRUE(applying.Wait());
+    std::string value;
+    EXPECT_OK(db_->Get(ReadOptions(), "key", &value));
+    EXPECT_EQ("value", value);
+    EXPECT_EQ(rounds, busy);
+    EXPECT_GT(blocked, 0U);
+    release.Set();
+    EXPECT_OK(dbfull()->WaitForAsyncCommit());
+    sp->DisableProcessing();
+    sp->ClearAllCallBacks();
+  }
+}
+
+TEST_P(AsyncCommitExecutorTest, CountedSpinHonorsDeadlineAtBoundaries) {
+  // Expire the DB clock during the spin. A large budget must not defer the
+  // deadline until it is exhausted, including when no spin is configured.
+  for (uint32_t rounds : {0U, 1U, 64U, 65U, 0xffffffffU}) {
+    Options options = PoolOptions();
+    options.async_commit_wait_spin_delay = 0;
+    DBOptions parsed;
+    ASSERT_OK(GetDBOptionsFromString(
+        options, "async_commit_wait_spin_rounds=" + std::to_string(rounds),
+        &parsed));
+    static_cast<DBOptions&>(options) = parsed;
+    SetTimeElapseOnlySleepOnReopen(&options);
+    Reopen(options);
+    PoolEvent applying, release;
+    unsigned busy = 0, blocked = 0;
+    auto* sp = SyncPoint::GetInstance();
+    sp->SetCallBack("DBImpl::AsyncWriteImpl:BeforeApply", [&](void*) {
+      applying.Set();
+      EXPECT_TRUE(release.Wait());
+    });
+    sp->SetCallBack("DBImpl::WaitForAsyncCommitSequence:Spin", [&](void*) {
+      if (++busy == 1) env_->MockSleepForMicroseconds(10000000);
     });
     sp->SetCallBack("DBImpl::WaitForAsyncCommitSequence:BeforeWait",
                     [&](void*) { ++blocked; });
@@ -329,15 +1157,44 @@ TEST_P(AsyncCommitExecutorTest, BusyPublicationWaitHonorsDeadline) {
     EXPECT_OK(db_->Put(Writes(), "key", "value"));
     EXPECT_TRUE(applying.Wait());
     ReadOptions read;
-    read.deadline = std::chrono::microseconds(env_->NowMicros() + 5000);
+    read.deadline = std::chrono::microseconds(
+        rounds == 0 ? -1 : env_->NowMicros() + 5000000);
     std::string value;
     EXPECT_TRUE(db_->Get(read, "key", &value).IsTimedOut());
-    EXPECT_EQ(0U, blocked.load());
+    EXPECT_EQ(std::min(rounds, 64U), busy);
+    EXPECT_EQ(0U, blocked);
     release.Set();
     EXPECT_OK(dbfull()->WaitForAsyncCommit());
     sp->DisableProcessing();
     sp->ClearAllCallBacks();
   }
+}
+
+TEST_P(AsyncCommitExecutorTest, CountedSpinCVHonorsDeadline) {
+  Options options = PoolOptions();
+  options.async_commit_wait_spin_rounds = 0;
+  Reopen(options);
+  PoolEvent applying, release;
+  unsigned blocked = 0;
+  auto* sp = SyncPoint::GetInstance();
+  sp->SetCallBack("DBImpl::AsyncWriteImpl:BeforeApply", [&](void*) {
+    applying.Set();
+    EXPECT_TRUE(release.Wait());
+  });
+  sp->SetCallBack("DBImpl::WaitForAsyncCommitSequence:BeforeWait",
+                  [&](void*) { ++blocked; });
+  sp->EnableProcessing();
+  EXPECT_OK(db_->Put(Writes(), "key", "value"));
+  EXPECT_TRUE(applying.Wait());
+  ReadOptions read;
+  read.deadline = std::chrono::microseconds(env_->NowMicros() + 5000);
+  std::string value;
+  EXPECT_TRUE(db_->Get(read, "key", &value).IsTimedOut());
+  EXPECT_GT(blocked, 0U);
+  release.Set();
+  EXPECT_OK(dbfull()->WaitForAsyncCommit());
+  sp->DisableProcessing();
+  sp->ClearAllCallBacks();
 }
 
 // Targets 1..6 cover separate slots and collisions. Replacing notify_all with
@@ -348,8 +1205,7 @@ TEST_P(AsyncCommitExecutorTest, PublicationAndErrorsWakeAllCoveredSlots) {
     for (bool fail : {false, true}) {
       Options options = PoolOptions();
       options.async_commit_wait_slots = slots;
-      options.async_commit_wait_spin_us = 0;
-      options.async_commit_wait_yield_us = 0;
+      options.async_commit_wait_spin_rounds = 0;
       DestroyAndReopen(options);
       PoolEvent applying, release;
       std::vector<std::unique_ptr<PoolEvent>> waiting;

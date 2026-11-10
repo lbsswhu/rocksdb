@@ -46,6 +46,7 @@ struct AsyncCommitGroup {
     uint64_t log_number;
   };
   std::unique_ptr<WriteBatch> merged_batch;
+  WriteBatch* inline_batch = nullptr;  // storage supplied by the serial subtype
   WriteBatch* apply_batch = nullptr;
   std::vector<Range> ranges;
   std::vector<ColumnFamilyData*> cf_refs;
@@ -55,6 +56,7 @@ struct AsyncCommitGroup {
   size_t record_count = 0;
   size_t reserved_bytes = 0;
   bool exclusive = false;
+  bool serial = false;
   uint64_t group_id = 0;
   uint64_t queued_micros = 0;
   std::shared_ptr<AsyncCommitGroup> next;
@@ -64,7 +66,20 @@ struct AsyncCommitGroup {
   std::atomic<size_t> remaining{0};
   bool queued = false;
   bool complete = false;
+  size_t MetadataBytes() const;
 };
+
+// make_shared keeps the owned batch object in the same allocation as the serial
+// group. The shared_ptr control block retains this subtype's destructor.
+struct AsyncCommitSerialGroup : AsyncCommitGroup {
+  AsyncCommitSerialGroup() { inline_batch = &batch; }
+  WriteBatch batch;
+};
+
+inline size_t AsyncCommitGroup::MetadataBytes() const {
+  return (inline_batch ? sizeof(AsyncCommitSerialGroup) : sizeof(AsyncCommitGroup)) +
+         4 * sizeof(std::shared_ptr<AsyncCommitGroup>);
+}
 
 // V3: pre-WAL preparation registers completion records under the async mutex.
 // Post-WAL publication and task dispatch use an independent lock-free FIFO.
@@ -77,7 +92,7 @@ class AsyncCommitExecutor {
   Status PrepareGroup(const std::shared_ptr<AsyncCommitGroup>& group);
   void CancelPreparedGroup(const std::shared_ptr<AsyncCommitGroup>& group);
   void SubmitPreparedGroup(const std::shared_ptr<AsyncCommitGroup>& group);
-  static size_t TaskStorageBytes(size_t ranges, bool exclusive);
+  static size_t TaskStorageBytes(size_t ranges, bool whole_group);
   uint64_t LastSubmitted();
   Status DrainThrough(uint64_t group_id);
   Status BeginShutdownAndDrain();
@@ -89,6 +104,7 @@ class AsyncCommitExecutor {
   bool TakeOrWait(size_t worker, AsyncCommitTask* task);
   void WaitForFence(const AsyncCommitTask& task);
   void Complete(const std::shared_ptr<AsyncCommitGroup>& group);
+  void Complete(const AsyncCommitTask* tasks, size_t count);
   DBImpl* const db_;
   const size_t workers_;
   ThreadPoolImpl pool_;

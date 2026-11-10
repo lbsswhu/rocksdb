@@ -5,6 +5,7 @@
 #pragma once
 
 #include <atomic>
+#include <cassert>
 #include <cstdint>
 #if defined(OS_LINUX)
 #include <climits>
@@ -46,6 +47,31 @@ class AsyncCommitEvent {
 #if defined(OS_LINUX)
     syscall(SYS_futex, reinterpret_cast<uint32_t*>(&epoch_),
             FUTEX_WAKE_PRIVATE, INT_MAX, nullptr, nullptr, 0);
+#else
+    std::lock_guard<std::mutex> lock(sleep_mutex_);
+    sleep_cv_.notify_all();
+#endif
+    return true;
+  }
+  // The WAL queue shares an epoch but can restrict a completion wake to the
+  // callers represented by its mask. Hash collisions are harmless: every
+  // caller still rechecks its own release/acquire Writer state.
+  void WaitWithMask(uint32_t observed, uint32_t mask) {
+    assert(mask != 0);
+#if defined(OS_LINUX)
+    syscall(SYS_futex, reinterpret_cast<uint32_t*>(&epoch_),
+            FUTEX_WAIT_BITSET_PRIVATE, observed, nullptr, nullptr, mask);
+#else
+    Wait(observed);
+#endif
+  }
+  bool NotifyMask(uint32_t mask) {
+    assert(mask != 0);
+    epoch_.fetch_add(1);
+    if (sleepers_.load() == 0) return false;
+#if defined(OS_LINUX)
+    syscall(SYS_futex, reinterpret_cast<uint32_t*>(&epoch_),
+            FUTEX_WAKE_BITSET_PRIVATE, INT_MAX, nullptr, nullptr, mask);
 #else
     std::lock_guard<std::mutex> lock(sleep_mutex_);
     sleep_cv_.notify_all();

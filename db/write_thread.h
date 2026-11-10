@@ -23,6 +23,7 @@
 #include "rocksdb/types.h"
 #include "rocksdb/write_batch.h"
 #include "util/autovector.h"
+#include "util/async_commit_event.h"
 
 namespace ROCKSDB_NAMESPACE {
 
@@ -136,6 +137,9 @@ class WriteThread {
     Status callback_status;  // status returned by callback->Callback()
     SequenceNumber async_end_sequence = 0;
     bool async_has_sequence = false;
+    // Installed before linking. The queue outlives every registered caller.
+    AsyncCommitEvent* async_wal_wait_event = nullptr;
+    uint32_t async_wal_wait_mask = 0;
     bool ignore_missing_column_families = false;
     bool memtable_insert_hint_per_batch = false;
 
@@ -391,6 +395,8 @@ class WriteThread {
 
   // Enable pipelined write to WAL and memtable.
   const bool enable_pipelined_write_;
+  const bool use_async_wal_event_;
+  AsyncCommitEvent async_wal_event_;
   std::function<void()> async_commit_drain_;
 
   // The maximum limit of number of bytes that are written in a single batch
@@ -433,6 +439,9 @@ class WriteThread {
 
   // Set writer state and wake the writer up if it is waiting.
   void SetState(Writer* w, uint8_t new_state);
+  // Publish an async Writer state without waking the shared event. The caller
+  // must notify after its group is detached and all follower states are ready.
+  uint32_t SetAsyncWalState(Writer* w, uint8_t new_state);
 
   // Links w into the newest_writer list. Return true if w was linked directly
   // into the leader position.  Safe to call from multiple threads without

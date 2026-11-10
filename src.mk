@@ -41,6 +41,7 @@ LIB_SOURCES =                                                   \
   db/db_impl/db_impl_readonly.cc                                \
   db/db_impl/db_impl_secondary.cc                               \
   db/async_commit_executor.cc                             \
+  db/async_commit_sequence_notifier.cc                    \
   db/db_impl/db_impl_async_commit.cc                         \
   db/db_impl/db_impl_write.cc                                   \
   db/db_info_dumper.cc                                          \

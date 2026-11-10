@@ -133,6 +133,7 @@ class Directories {
 // Since it's a very large class, the definition of the functions is
 // divided in several db_impl_*.cc files, besides db_impl.cc.
 class AsyncCommitExecutor;
+class AsyncCommitSequenceNotifier;
 struct AsyncCommitGroup;
 
 class DBImpl : public DB {
@@ -1288,8 +1289,10 @@ class DBImpl : public DB {
                               bool concurrent);
   void ScheduleAsyncCommitTargets(const AsyncCommitGroup& group);
   void ReleaseAsyncCommitResources(AsyncCommitGroup* group);
+  void ReleaseAsyncCommitResources(AsyncCommitGroup* const* groups, size_t count);
   void StartAsyncCommitExecutor();
   Status StopAsyncCommitExecutor();
+  void StopAsyncCommitSequenceNotifier();
   Status DrainAsyncCommits(uint64_t target_group_id);
   void DrainAsyncCommitsWithDBMutex();
   Status ReserveAsyncCommitBytes(size_t bytes, size_t already_reserved,
@@ -1301,6 +1304,8 @@ class DBImpl : public DB {
   Status WaitForAsyncCommitSequence(SequenceNumber target,
                                     const ReadOptions& options);
   void NotifyAsyncCommitPublication(SequenceNumber previous,
+                                    SequenceNumber published);
+  void SignalAsyncCommitPublication(SequenceNumber previous,
                                     SequenceNumber published);
   void NotifyAllAsyncCommitWaiters();
 
@@ -1381,6 +1386,7 @@ class DBImpl : public DB {
  private:
   friend class DB;
   friend class AsyncCommitExecutor;
+  friend class AsyncCommitSequenceNotifier;
   friend class ErrorHandler;
   friend class InternalStats;
   friend class PessimisticTransaction;
@@ -2141,6 +2147,7 @@ class DBImpl : public DB {
   std::unique_ptr<AsyncCommitWaitSlot[]> async_commit_wait_slots_;
   std::atomic<bool> async_commit_wait_stopped_{false};
   std::unique_ptr<AsyncCommitExecutor> async_commit_executor_;
+  std::unique_ptr<AsyncCommitSequenceNotifier> async_commit_sequence_notifier_;
   std::mutex async_commit_mutex_;
   std::condition_variable async_commit_cv_;
   Status async_commit_error_;

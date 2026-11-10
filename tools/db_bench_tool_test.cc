@@ -141,8 +141,9 @@ TEST_F(DBBenchTest, StrongVisibilityFlagPersistsEffectiveOptions) {
               "--enable_async_commit=1",
               "--async_commit_strong_visibility=1",
               "--async_commit_wait_slots=3",
-              "--async_commit_wait_spin_us=0",
-              "--async_commit_wait_yield_us=7",
+              "--async_commit_wait_spin_rounds=64",
+              "--async_commit_wait_spin_delay=7",
+              "--async_commit_wait_spin_pause_multiplier=13",
               "--enable_pipelined_write=0",
               "--async_commit_memtable_threads=1",
               "--allow_concurrent_memtable_write=0",
@@ -162,8 +163,9 @@ TEST_F(DBBenchTest, StrongVisibilityFlagPersistsEffectiveOptions) {
   EXPECT_TRUE(loaded.enable_async_commit);
   EXPECT_EQ(1, loaded.async_commit_memtable_threads);
   EXPECT_EQ(3U, loaded.async_commit_wait_slots);
-  EXPECT_EQ(0U, loaded.async_commit_wait_spin_us);
-  EXPECT_EQ(7U, loaded.async_commit_wait_yield_us);
+  EXPECT_EQ(64U, loaded.async_commit_wait_spin_rounds);
+  EXPECT_EQ(7U, loaded.async_commit_wait_spin_delay);
+  EXPECT_EQ(13U, loaded.async_commit_wait_spin_pause_multiplier);
   EXPECT_FALSE(loaded.enable_pipelined_write);
 }
 

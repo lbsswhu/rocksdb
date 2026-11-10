@@ -8,6 +8,7 @@
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 #include "db/db_impl/db_impl.h"
 #include "db/async_commit_executor.h"
+#include "db/async_commit_sequence_notifier.h"
 
 #include <stdint.h>
 #ifdef OS_SOLARIS
@@ -532,6 +533,7 @@ Status DBImpl::CloseHelper() {
     }
     async_commit_cv_.notify_all();
     NotifyAllAsyncCommitWaiters();
+    StopAsyncCommitSequenceNotifier();
   }
   // Guarantee that there is no background error recovery in progress before
   // continuing with the shutdown

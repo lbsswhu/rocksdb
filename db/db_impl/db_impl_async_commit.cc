@@ -9,11 +9,13 @@
 #include <thread>
 
 #include "db/async_commit_executor.h"
+#include "db/async_commit_sequence_notifier.h"
 #include "db/db_impl/db_impl.h"
 #include "db/write_batch_internal.h"
 #include "logging/logging.h"
 #include "monitoring/perf_context_imp.h"
 #include "test_util/sync_point.h"
+#include "util/random.h"
 
 namespace ROCKSDB_NAMESPACE {
 
@@ -109,7 +111,7 @@ Status DBImpl::PublishAsyncCommitSequence(SequenceNumber sequence) {
     versions_->SetLastSequence(sequence);
   }
   async_commit_cv_.notify_all();
-  NotifyAsyncCommitPublication(previous, sequence);
+  SignalAsyncCommitPublication(previous, sequence);
   return Status::OK();
 }
 
@@ -131,46 +133,84 @@ Status DBImpl::PrepareAsyncCommitRead(const ReadOptions& options) {
 Status DBImpl::WaitForAsyncCommitSequence(SequenceNumber target,
                                           const ReadOptions& options) {
   if (versions_->LastSequence() >= target) return Status::OK();
-  const auto start = std::chrono::steady_clock::now();
-  const uint64_t spin_us = immutable_db_options_.async_commit_wait_spin_us;
-  const uint64_t busy_us =
-      spin_us + immutable_db_options_.async_commit_wait_yield_us;
+  const uint32_t spin_rounds =
+      immutable_db_options_.async_commit_wait_spin_rounds;
+  const bool has_deadline = options.deadline.count() != 0;
   auto check_deadline = [&]() {
-    return options.deadline.count() != 0 &&
+    return has_deadline &&
            (options.deadline.count() < 0 ||
             immutable_db_options_.clock->NowMicros() >=
                 static_cast<uint64_t>(options.deadline.count()));
   };
-  while (versions_->LastSequence() < target) {
+  if (async_commit_wait_stopped_.load(std::memory_order_acquire))
+    return AsyncCommitStatus();
+  if (check_deadline())
+    return Status::TimedOut("waiting for async commit publication");
+  const uint32_t spin_delay = immutable_db_options_.async_commit_wait_spin_delay;
+  const uint32_t pause_multiplier =
+      immutable_db_options_.async_commit_wait_spin_pause_multiplier;
+  Random* random = spin_rounds != 0 && spin_delay != 0 && pause_multiplier != 0
+                       ? Random::GetTLSInstance()
+                       : nullptr;
+  // InnoDB-style outer predicate polls with randomized, grouped CPU delay.
+  // The acquire predicate supplies publication synchronization; an additional
+  // os_rmb is unnecessary. The normal inner loop touches only local state.
+  for (uint32_t round = 0; round < spin_rounds; ++round) {
+    if (versions_->LastSequence() >= target) return Status::OK();
     if (async_commit_wait_stopped_.load(std::memory_order_acquire))
       return AsyncCommitStatus();
-    if (check_deadline())
+    if (has_deadline && round != 0 && (round & 63U) == 0 && check_deadline())
       return Status::TimedOut("waiting for async commit publication");
-    const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
-                             std::chrono::steady_clock::now() - start)
-                             .count();
-    if (static_cast<uint64_t>(elapsed) >= busy_us) break;
-    if (static_cast<uint64_t>(elapsed) < spin_us) {
-      TEST_SYNC_POINT("DBImpl::WaitForAsyncCommitSequence:Spin");
-      port::AsmVolatilePause();
+    // Validation bounds the product to 999 * 100, including at UINT32_MAX
+    // outer rounds. Uniform's upper bound is exclusive, like ut_delay's caller.
+    uint32_t pauses = random ? random->Uniform(spin_delay) * pause_multiplier : 0;
+    TEST_SYNC_POINT_CALLBACK("DBImpl::WaitForAsyncCommitSequence:Spin", &pauses);
+    if (!has_deadline) {
+      for (uint32_t pause = 0; pause < pauses; ++pause) {
+        TEST_SYNC_POINT("DBImpl::WaitForAsyncCommitSequence:Pause");
+        port::AsmVolatilePause();
+      }
     } else {
-      TEST_SYNC_POINT("DBImpl::WaitForAsyncCommitSequence:Yield");
-      std::this_thread::yield();
+      // Explicit deadlines may interrupt a long delay. Keep clock/predicate
+      // checks outside the normal no-deadline inner loop.
+      while (pauses != 0) {
+        const uint32_t chunk = std::min(pauses, 64U);
+        for (uint32_t pause = 0; pause < chunk; ++pause) {
+          TEST_SYNC_POINT("DBImpl::WaitForAsyncCommitSequence:Pause");
+          port::AsmVolatilePause();
+        }
+        pauses -= chunk;
+        if (versions_->LastSequence() >= target) return Status::OK();
+        if (async_commit_wait_stopped_.load(std::memory_order_acquire))
+          return AsyncCommitStatus();
+        if (check_deadline())
+          return Status::TimedOut("waiting for async commit publication");
+      }
     }
   }
   if (versions_->LastSequence() >= target) return Status::OK();
+  if (async_commit_wait_stopped_.load(std::memory_order_acquire))
+    return AsyncCommitStatus();
+  if (check_deadline())
+    return Status::TimedOut("waiting for async commit publication");
   uint32_t index = target % immutable_db_options_.async_commit_wait_slots;
   TEST_SYNC_POINT_CALLBACK("DBImpl::WaitForAsyncCommitSequence:BeforeSlotLock",
                            &index);
   auto& slot = async_commit_wait_slots_[index];
   std::unique_lock<std::mutex> lock(slot.mutex);
-  // The publisher locks every slot crossed by P, even an empty one. Together
+  // The notifier locks every slot crossed by P, even an empty one. Together
   // with this locked predicate recheck this closes the check-to-sleep race.
+  if (versions_->LastSequence() >= target) return Status::OK();
   ++slot.waiters;
+  async_commit_sequence_notifier_->RegisterWaiter();
   struct Registration {
     size_t& waiters;
-    ~Registration() { --waiters; }
-  } registration{slot.waiters};
+    AsyncCommitSequenceNotifier* notifier;
+    ~Registration() {
+      --waiters;
+      notifier->UnregisterWaiter();
+    }
+  } registration{slot.waiters, async_commit_sequence_notifier_.get()};
   while (versions_->LastSequence() < target) {
     if (async_commit_wait_stopped_.load(std::memory_order_acquire))
       return AsyncCommitStatus();
@@ -195,6 +235,16 @@ Status DBImpl::WaitForAsyncCommitSequence(SequenceNumber target,
     }
   }
   return Status::OK();
+}
+
+void DBImpl::SignalAsyncCommitPublication(SequenceNumber previous,
+                                          SequenceNumber published) {
+  assert(published >= previous);
+  if (published > previous) {
+    async_commit_sequence_notifier_->PublicationAdvanced();
+    TEST_SYNC_POINT_CALLBACK("DBImpl::SignalAsyncCommitPublication:Published",
+                             &published);
+  }
 }
 
 void DBImpl::NotifyAsyncCommitPublication(SequenceNumber previous,
@@ -257,21 +307,40 @@ Status DBImpl::ReserveAsyncCommitBytes(size_t bytes, size_t already_reserved,
 }
 
 void DBImpl::ReleaseAsyncCommitResources(AsyncCommitGroup* group) {
-  group->merged_batch.reset();
-  group->apply_batch = nullptr;
-  std::vector<AsyncCommitGroup::Range>().swap(group->ranges);
+  ReleaseAsyncCommitResources(&group, 1);
+}
+
+void DBImpl::ReleaseAsyncCommitResources(AsyncCommitGroup* const* groups,
+                                         size_t count) {
+  for (size_t i = 0; i < count; ++i) {
+    auto* group = groups[i];
+    group->merged_batch.reset();
+    if (group->inline_batch) *group->inline_batch = WriteBatch();
+    group->apply_batch = nullptr;
+    std::vector<AsyncCommitGroup::Range>().swap(group->ranges);
+  }
   {
     InstrumentedMutexLock lock(&mutex_);
-    for (const auto& target : group->targets) {
-      // The current memtable still owns a reference: all switches drain first.
-      MemTable* obsolete = target.mem->Unref();
-      assert(obsolete == nullptr);
-      delete obsolete;
+    for (size_t i = 0; i < count; ++i) {
+      auto* group = groups[i];
+      // A serial queue task covers the entire group. Its final scheduling
+      // check shares this lock with reference retirement, before P/drain can
+      // advance. Rejected, never-queued groups have no insertion to schedule.
+      if (group->serial && group->queued) ScheduleAsyncCommitTargets(*group);
+      for (const auto& target : group->targets) {
+        // The current memtable still owns a reference: all switches drain
+        // first.
+        MemTable* obsolete = target.mem->Unref();
+        assert(obsolete == nullptr);
+        delete obsolete;
+      }
+      for (auto* cfd : group->cf_refs) cfd->UnrefAndTryDelete();
     }
-    for (auto* cfd : group->cf_refs) cfd->UnrefAndTryDelete();
   }
-  std::vector<AsyncCommitGroup::Target>().swap(group->targets);
-  std::vector<ColumnFamilyData*>().swap(group->cf_refs);
+  for (size_t i = 0; i < count; ++i) {
+    std::vector<AsyncCommitGroup::Target>().swap(groups[i]->targets);
+    std::vector<ColumnFamilyData*>().swap(groups[i]->cf_refs);
+  }
 }
 
 void DBImpl::ReleaseAsyncCommitGroup(AsyncCommitGroup* group) {
@@ -339,18 +408,21 @@ Status DBImpl::BuildAsyncCommitGroup(WriteThread::WriteGroup& writers,
     }
   }
   // Charge conservative allocation capacities, including checksums and the
-  // descriptor/reference arrays. Single-request payload is caller-owned.
+  // descriptor/reference arrays. Only the no-pool single-request path borrows
+  // caller storage.
   const size_t task_storage =
       immutable_db_options_.async_commit_memtable_threads > 0
-          ? AsyncCommitExecutor::TaskStorageBytes(group->ranges.size(),
-                                                   group->exclusive)
+          ? AsyncCommitExecutor::TaskStorageBytes(
+                group->ranges.size(),
+                group->exclusive ||
+                    immutable_db_options_.async_commit_memtable_threads == 1)
           : 0;
   const size_t metadata =
-      sizeof(AsyncCommitGroup) +
+      group->MetadataBytes() +
       group->ranges.capacity() * sizeof(AsyncCommitGroup::Range) +
       group->cf_refs.capacity() * sizeof(ColumnFamilyData*) +
       group->targets.capacity() * sizeof(AsyncCommitGroup::Target) +
-      4 * sizeof(std::shared_ptr<AsyncCommitGroup>) + task_storage;
+      task_storage;
   const size_t protection =
       writers.leader->protection_bytes_per_key
           ? sizeof(WriteBatch::ProtectionInfo) +
@@ -363,7 +435,8 @@ Status DBImpl::BuildAsyncCommitGroup(WriteThread::WriteGroup& writers,
   size_t bytes = metadata;
   const bool owned = immutable_db_options_.async_commit_memtable_threads > 0;
   if (writers.size > 1 || owned) {
-    bytes += sizeof(WriteBatch) + 2 * (merged_bytes + protection);
+    bytes += (group->inline_batch ? 0 : sizeof(WriteBatch)) +
+             2 * (merged_bytes + protection);
   }
   Status status =
       ReserveAsyncCommitBytes(bytes, 0, writers.leader->no_slowdown);
@@ -372,18 +445,24 @@ Status DBImpl::BuildAsyncCommitGroup(WriteThread::WriteGroup& writers,
   if (writers.size == 1 && !owned) {
     group->apply_batch = writers.leader->batch;
   } else {
-    group->merged_batch.reset(new WriteBatch(
-        merged_bytes, 0, writers.leader->protection_bytes_per_key));
-    WriteBatchInternal::ReserveForAppend(group->merged_batch.get(),
+    if (group->inline_batch) {
+      *group->inline_batch =
+          WriteBatch(merged_bytes, 0, writers.leader->protection_bytes_per_key);
+      group->apply_batch = group->inline_batch;
+    } else {
+      group->merged_batch.reset(new WriteBatch(
+          merged_bytes, 0, writers.leader->protection_bytes_per_key));
+      group->apply_batch = group->merged_batch.get();
+    }
+    WriteBatchInternal::ReserveForAppend(group->apply_batch,
                                          group->record_count);
     for (auto* writer : writers) {
-      status =
-          WriteBatchInternal::Append(group->merged_batch.get(), writer->batch);
+      status = WriteBatchInternal::Append(group->apply_batch, writer->batch);
       if (!status.ok()) return status;
     }
-    group->apply_batch = group->merged_batch.get();
-    size_t actual =
-        metadata + WriteBatchInternal::AllocatedBytes(group->apply_batch);
+    size_t actual = metadata +
+                    WriteBatchInternal::AllocatedBytes(group->apply_batch) -
+                    (group->inline_batch ? sizeof(WriteBatch) : 0);
     if (actual > bytes) {
       status =
           ReserveAsyncCommitBytes(actual, bytes, writers.leader->no_slowdown);
@@ -453,8 +532,12 @@ Status DBImpl::AsyncWriteImpl(const WriteOptions& options, WriteBatch* batch,
   WriteThread::WriteGroup wal_group;
   AsyncCommitGroup local_group;  // Preserve V1's stack-owned fast path.
   std::shared_ptr<AsyncCommitGroup> owned_group;
-  if (async_commit_executor_)
-    owned_group = std::make_shared<AsyncCommitGroup>();
+  if (async_commit_executor_) {
+    if (immutable_db_options_.async_commit_memtable_threads == 1)
+      owned_group = std::make_shared<AsyncCommitSerialGroup>();
+    else
+      owned_group = std::make_shared<AsyncCommitGroup>();
+  }
   AsyncCommitGroup& group = owned_group ? *owned_group : local_group;
   bool need_log_sync = options.sync;
   bool need_log_dir_sync = false;
@@ -681,6 +764,9 @@ void DBImpl::ScheduleAsyncCommitTargets(const AsyncCommitGroup& group) {
 }
 
 void DBImpl::StartAsyncCommitExecutor() {
+  if (!immutable_db_options_.enable_async_commit) return;
+  async_commit_sequence_notifier_.reset(new AsyncCommitSequenceNotifier(this));
+  async_commit_sequence_notifier_->Start(versions_->LastSequence());
   if (immutable_db_options_.async_commit_memtable_threads == 0) return;
   async_commit_executor_.reset(new AsyncCommitExecutor(this));
   async_commit_executor_->Start();
@@ -694,6 +780,10 @@ Status DBImpl::StopAsyncCommitExecutor() {
   return async_commit_executor_
              ? async_commit_executor_->BeginShutdownAndDrain()
              : Status::OK();
+}
+
+void DBImpl::StopAsyncCommitSequenceNotifier() {
+  if (async_commit_sequence_notifier_) async_commit_sequence_notifier_->Stop();
 }
 
 Status DBImpl::DrainAsyncCommits(uint64_t target_group_id) {
