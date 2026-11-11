@@ -248,6 +248,8 @@ Status DBImpl::ValidateOptions(const DBOptions& db_options) {
         "async_commit_memtable_threads > 0");
   }
   if (db_options.async_commit_memtable_threads < 0 ||
+      db_options.async_commit_memtable_groups_per_fetch < 1 ||
+      db_options.async_commit_memtable_groups_per_fetch > 64 ||
       (!db_options.enable_async_commit &&
        db_options.async_commit_memtable_threads != 0) ||
       (db_options.async_commit_memtable_threads > 1 &&

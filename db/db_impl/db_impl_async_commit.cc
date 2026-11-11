@@ -323,10 +323,10 @@ void DBImpl::ReleaseAsyncCommitResources(AsyncCommitGroup* const* groups,
     InstrumentedMutexLock lock(&mutex_);
     for (size_t i = 0; i < count; ++i) {
       auto* group = groups[i];
-      // A serial queue task covers the entire group. Its final scheduling
-      // check shares this lock with reference retirement, before P/drain can
-      // advance. Rejected, never-queued groups have no insertion to schedule.
-      if (group->serial && group->queued) ScheduleAsyncCommitTargets(*group);
+      // A pool queue task covers the entire group. Its final scheduling
+      // check shares this lock with reference retirement, before drain advances.
+      // Rejected, never-queued groups have no insertion to schedule.
+      if (group->queued) ScheduleAsyncCommitTargets(*group);
       for (const auto& target : group->targets) {
         // The current memtable still owns a reference: all switches drain
         // first.
@@ -412,10 +412,7 @@ Status DBImpl::BuildAsyncCommitGroup(WriteThread::WriteGroup& writers,
   // caller storage.
   const size_t task_storage =
       immutable_db_options_.async_commit_memtable_threads > 0
-          ? AsyncCommitExecutor::TaskStorageBytes(
-                group->ranges.size(),
-                group->exclusive ||
-                    immutable_db_options_.async_commit_memtable_threads == 1)
+          ? AsyncCommitExecutor::TaskStorageBytes()
           : 0;
   const size_t metadata =
       group->MetadataBytes() +
@@ -619,8 +616,8 @@ Status DBImpl::AsyncWriteImpl(const WriteOptions& options, WriteBatch* batch,
     write_thread_.DetachAsyncFollowersKeepLeader(wal_group, status);
     TEST_SYNC_POINT("DBImpl::AsyncWriteImpl:RejectedGroupCleanup");
     // Keep the WAL gate until rejected targets are released. A prepared V3
-    // record must be cancelled as well, so no incomplete frontier entry leaks.
-    if (owned_group && group.group_id != 0)
+    // task and its prepared completion owner must both be cancelled.
+    if (owned_group && group.first_task != nullptr)
       async_commit_executor_->CancelPreparedGroup(owned_group);
     else
       ReleaseAsyncCommitGroup(&group);
@@ -645,15 +642,13 @@ Status DBImpl::AsyncWriteImpl(const WriteOptions& options, WriteBatch* batch,
                            group.apply_batch);
   if (async_commit_executor_) {
     async_commit_executor_->SubmitPreparedGroup(owned_group);
-    // Sync writes benefit from notifying this group's callers before the next
-    // WAL snapshot. Without sync, that serialization makes the short WAL path
-    // pay for every follower notification before progressing to the next group.
-    // Both policies enqueue first and release the WAL gate before finish()
-    // optionally waits for memtable sequence publication.
+    // Notify synchronous callers before releasing the WAL gate so they can
+    // join the next group and share its sync. Non-sync groups hand off the
+    // next leader first to keep follower notifications off the short WAL path.
     if (options.sync)
       write_thread_.DetachAsyncFollowersKeepLeader(wal_group, Status::OK());
     TEST_SYNC_POINT("AsyncCommitExecutor::Submit:BeforeWake");
-    async_commit_executor_->WakeAll();
+    async_commit_executor_->WakeOne();
     if (options.sync)
       write_thread_.ExitUnbatched(&writer);
     else

@@ -6,9 +6,9 @@
 
 #include <atomic>
 #include <cassert>
+#include <climits>
 #include <cstdint>
 #if defined(OS_LINUX)
-#include <climits>
 #include <linux/futex.h>
 #include <sys/syscall.h>
 #include <unistd.h>
@@ -41,18 +41,27 @@ class AsyncCommitEvent {
     sleep_cv_.wait(lock, [&] { return epoch_.load() != observed; });
 #endif
   }
-  bool NotifyAll() {
+  bool NotifyAll() { return Notify(INT_MAX); }
+  bool NotifyOne() { return Notify(1); }
+
+ private:
+  bool Notify(int count) {
     epoch_.fetch_add(1);
     if (sleepers_.load() == 0) return false;
 #if defined(OS_LINUX)
-    syscall(SYS_futex, reinterpret_cast<uint32_t*>(&epoch_),
-            FUTEX_WAKE_PRIVATE, INT_MAX, nullptr, nullptr, 0);
+    syscall(SYS_futex, reinterpret_cast<uint32_t*>(&epoch_), FUTEX_WAKE_PRIVATE,
+            count, nullptr, nullptr, 0);
 #else
     std::lock_guard<std::mutex> lock(sleep_mutex_);
-    sleep_cv_.notify_all();
+    if (count == 1)
+      sleep_cv_.notify_one();
+    else
+      sleep_cv_.notify_all();
 #endif
     return true;
   }
+
+ public:
   // The WAL queue shares an epoch but can restrict a completion wake to the
   // callers represented by its mask. Hash collisions are harmless: every
   // caller still rechecks its own release/acquire Writer state.

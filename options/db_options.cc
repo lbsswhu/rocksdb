@@ -331,6 +331,11 @@ static std::unordered_map<std::string, OptionTypeInfo>
          {offsetof(struct ImmutableDBOptions, async_commit_wait_slots),
           OptionType::kUInt32T, OptionVerificationType::kNormal,
           OptionTypeFlags::kNone}},
+        {"async_commit_memtable_groups_per_fetch",
+         {offsetof(struct ImmutableDBOptions,
+                   async_commit_memtable_groups_per_fetch),
+          OptionType::kUInt32T, OptionVerificationType::kNormal,
+          OptionTypeFlags::kNone}},
         {"async_commit_wait_spin_rounds",
          {offsetof(struct ImmutableDBOptions, async_commit_wait_spin_rounds),
           OptionType::kUInt32T, OptionVerificationType::kNormal,
@@ -750,6 +755,8 @@ ImmutableDBOptions::ImmutableDBOptions(const DBOptions& options)
           options.async_commit_wait_spin_pause_multiplier),
       max_async_commit_pending_bytes(options.max_async_commit_pending_bytes),
       async_commit_memtable_threads(options.async_commit_memtable_threads),
+      async_commit_memtable_groups_per_fetch(
+          options.async_commit_memtable_groups_per_fetch),
       max_async_commit_pending_groups(options.max_async_commit_pending_groups),
       unordered_write(options.unordered_write),
       allow_concurrent_memtable_write(options.allow_concurrent_memtable_write),
@@ -907,6 +914,9 @@ void ImmutableDBOptions::Dump(Logger* log) const {
                    max_async_commit_pending_groups);
   ROCKS_LOG_HEADER(log, "                    Options.enable_async_commit: %d",
                    enable_async_commit);
+  ROCKS_LOG_HEADER(log,
+                   "       Options.async_commit_memtable_groups_per_fetch: %u",
+                   async_commit_memtable_groups_per_fetch);
   ROCKS_LOG_HEADER(log, "          Options.async_commit_strong_visibility: %d",
                    async_commit_strong_visibility);
   ROCKS_LOG_HEADER(log, "                 Options.async_commit_wait_slots: %u",

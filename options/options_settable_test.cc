@@ -324,6 +324,7 @@ TEST_F(OptionsSettableTest, DBOptionsAllFieldsSettable) {
                              "async_commit_wait_spin_pause_multiplier=50;"
                              "max_async_commit_pending_bytes=67108864;"
                              "async_commit_memtable_threads=3;"
+                             "async_commit_memtable_groups_per_fetch=1;"
                              "max_async_commit_pending_groups=4096;"
                              "unordered_write=false;"
                              "allow_concurrent_memtable_write=true;"

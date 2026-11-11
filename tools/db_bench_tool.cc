@@ -1192,6 +1192,9 @@ DEFINE_bool(
     "Wait for async memtable publication before successful write return");
 DEFINE_int32(async_commit_memtable_threads, 0,
              "Dedicated async commit memtable workers (zero uses original leader)");
+DEFINE_uint32(async_commit_memtable_groups_per_fetch, 1,
+              "Maximum ready WAL groups fetched per worker in multi-worker "
+              "mode, in [1,64]");
 DEFINE_uint32(async_commit_wait_slots, 32,
               "Async publication wait shards, in [1, 1024]");
 DEFINE_uint32(async_commit_wait_spin_rounds, 30,
@@ -4372,6 +4375,8 @@ class Benchmark {
     options.async_commit_strong_visibility =
         FLAGS_async_commit_strong_visibility;
     options.async_commit_memtable_threads = FLAGS_async_commit_memtable_threads;
+    options.async_commit_memtable_groups_per_fetch =
+        FLAGS_async_commit_memtable_groups_per_fetch;
     options.async_commit_wait_slots = FLAGS_async_commit_wait_slots;
     options.async_commit_wait_spin_rounds = FLAGS_async_commit_wait_spin_rounds;
     options.async_commit_wait_spin_delay = FLAGS_async_commit_wait_spin_delay;

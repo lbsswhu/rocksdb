@@ -10,6 +10,7 @@
 #include <limits>
 #include <thread>
 
+#include "db/async_commit_sequence_notifier.h"
 #include "db/db_impl/db_impl.h"
 #include "db/write_batch_internal.h"
 #include "port/port.h"
@@ -37,8 +38,8 @@ void AsyncCommitExecutor::Start() {
   db_->async_commit_cv_.wait(lock, [&] { return started_workers_ == workers_; });
 }
 
-size_t AsyncCommitExecutor::TaskStorageBytes(size_t ranges, bool whole_group) {
-  return (whole_group ? 1 : ranges) * sizeof(AsyncCommitTaskQueue::Node);
+size_t AsyncCommitExecutor::TaskStorageBytes() {
+  return sizeof(AsyncCommitTaskQueue::Node);
 }
 
 Status AsyncCommitExecutor::PrepareGroup(
@@ -46,46 +47,30 @@ Status AsyncCommitExecutor::PrepareGroup(
   if (!accepting_.load()) return Status::ShutdownInProgress();
   assert((group->merged_batch || group->inline_batch) && group->apply_batch &&
          !group->ranges.empty());
-  group->serial = workers_ == 1;
-  const size_t count = group->exclusive || group->serial ? 1 : group->ranges.size();
-  for (size_t i = 0; i < count; ++i) {
-    auto* node = new AsyncCommitTaskQueue::Node(AsyncCommitTask(group, i));
-    if (group->last_task) group->last_task->next.store(node);
-    else group->first_task = node;
-    group->last_task = node;
-  }
-  group->remaining.store(count);
+  group->first_task = new AsyncCommitTaskQueue::Node(AsyncCommitTask(group));
   group->previous_barrier = last_exclusive_;
-  // This is before WAL, and may wait for an older completion. Publication after
-  // a successful WAL never acquires this registry/publication mutex.
-  std::lock_guard<std::mutex> lock(db_->async_commit_mutex_);
-  group->group_id = ++prepared_;
-  if (tail_) tail_->next = group;
-  else head_ = group;
-  tail_ = group;
+  // Prepared before WAL: no allocation or reference acquisition is needed
+  // when a multi-worker task transfers its completion record to the notifier.
+  if (workers_ > 1) group->completion_owner = group;
   return Status::OK();
 }
 
 void AsyncCommitExecutor::CancelPreparedGroup(
     const std::shared_ptr<AsyncCommitGroup>& group) {
-  auto* node = group->first_task;
-  group->first_task = group->last_task = nullptr;
-  while (node) {
-    auto* next = node->next.load();
-    delete node;
-    node = next;
-  }
-  group->remaining.store(1);
-  Complete(group);
+  assert(!group->queued && group->group_id == 0);
+  delete group->first_task;
+  group->first_task = nullptr;
+  group->completion_owner.reset();
+  db_->ReleaseAsyncCommitGroup(group.get());
 }
 
 void AsyncCommitExecutor::SubmitPreparedGroup(
     const std::shared_ptr<AsyncCommitGroup>& group) {
   const uint64_t start = db_->immutable_db_options_.clock->NowMicros();
   auto* first = group->first_task;
-  auto* last = group->last_task;
-  assert(first && last && group->group_id != 0);
-  group->first_task = group->last_task = nullptr;
+  assert(first && group->group_id == 0);
+  group->group_id = ++prepared_;
+  group->first_task = nullptr;
   group->queued_micros = start;
   group->queued = true;
   if (group->ranges.size() == 1)
@@ -94,7 +79,7 @@ void AsyncCommitExecutor::SubmitPreparedGroup(
   if (group->exclusive) last_exclusive_ = group->group_id;
   last_submitted_.store(group->group_id, std::memory_order_release);
   submitted_.fetch_add(1, std::memory_order_relaxed);
-  queue_.PushChain(first, last);
+  queue_.PushChain(first, first);
   // No access to payload/ranges/targets after publication: workers can finish
   // before the WAL caller even begins notifying its followers.
   const uint64_t end = db_->immutable_db_options_.clock->NowMicros();
@@ -108,7 +93,8 @@ uint64_t AsyncCommitExecutor::LastSubmitted() {
 Status AsyncCommitExecutor::DrainThrough(uint64_t group_id) {
   std::unique_lock<std::mutex> lock(db_->async_commit_mutex_);
   assert(group_id <= LastSubmitted());
-  while (drained_ticket_ < group_id) {
+  while (drained_ticket_ < group_id ||
+         (db_->async_commit_error_.ok() && published_ticket_ < group_id)) {
     TEST_SYNC_POINT("AsyncCommitExecutor::DrainThrough:Wait");
     db_->async_commit_cv_.wait(lock);
   }
@@ -128,6 +114,10 @@ Status AsyncCommitExecutor::BeginShutdownAndDrain() {
 
 void AsyncCommitExecutor::WakeAll() {
   if (event_.NotifyAll()) wake_calls_.fetch_add(1, std::memory_order_relaxed);
+}
+
+void AsyncCommitExecutor::WakeOne() {
+  if (event_.NotifyOne()) wake_calls_.fetch_add(1, std::memory_order_relaxed);
 }
 
 bool AsyncCommitExecutor::GetIntProperty(const Slice& name, uint64_t* value) {
@@ -218,6 +208,12 @@ void AsyncCommitExecutor::Run(size_t worker) {
     ++started_workers_;
     db_->async_commit_cv_.notify_all();
   }
+  if (workers_ == 1) {
+    RunSerial(worker);
+    return;
+  }
+  const size_t fetch_limit =
+      db_->immutable_db_options_.async_commit_memtable_groups_per_fetch;
   AsyncCommitTask pending;
   for (;;) {
     std::array<AsyncCommitTask, 64> refs;
@@ -225,162 +221,157 @@ void AsyncCommitExecutor::Run(size_t worker) {
     else if (!TakeOrWait(worker, &refs[0]))
       return;
     size_t count = 1;
-    size_t bytes =
-        refs[0].group->exclusive || refs[0].group->serial
-            ? WriteBatchInternal::ByteSize(refs[0].group->apply_batch) -
-                  WriteBatchInternal::kHeader
-            : refs[0].group->ranges[refs[0].index].end_offset -
-                  refs[0].group->ranges[refs[0].index].begin_offset;
-    // Multiple workers take one range per lease to preserve prompt group-local
-    // parallelism. The serial worker amortizes scheduling across queued groups.
-    while (workers_ == 1 && !refs[0].group->exclusive && count < refs.size() &&
-           bytes < 65536) {
+    while (!refs[0].group->exclusive && count < fetch_limit) {
       AsyncCommitTask next;
       if (!queue_.TryPop(worker, &next)) break;
-      const auto& group = *next.group;
-      if (group.exclusive ||
-          group.previous_barrier != refs[0].group->previous_barrier) {
+      if (next.group->exclusive ||
+          next.group->previous_barrier != refs[0].group->previous_barrier) {
         pending = std::move(next);
         break;
       }
-      size_t size = group.serial
-                        ? WriteBatchInternal::ByteSize(group.apply_batch) -
-                              WriteBatchInternal::kHeader
-                        : group.ranges[next.index].end_offset -
-                              group.ranges[next.index].begin_offset;
-      if (size > 65536 - bytes) {
-        pending = std::move(next);
-        break;
-      }
-      bytes += size;
       refs[count++] = std::move(next);
     }
-    // Finish every previous local batch before waiting on its successor fence.
-    WaitForFence(refs[0]);
     lease_batches_.fetch_add(1, std::memory_order_relaxed);
-    leased_bytes_.fetch_add(bytes, std::memory_order_relaxed);
-    // Bound visibility delay without giving up the larger queue lease. Complete
-    // each chunk before applying the next one; batch its reference retirement,
-    // prefix publication and notifications. Multi-worker leases stay singular.
-    constexpr size_t kCompletionChunkRanges = 8;
-    auto range_count = [](const AsyncCommitTask& task) {
-      return task.group->exclusive || task.group->serial
-                 ? task.group->ranges.size()
-                 : size_t{1};
-    };
-    for (size_t begin = 0; begin < count;) {
-      size_t end = begin + 1;
-      size_t chunk_ranges = range_count(refs[begin]);
-      while (end < count && chunk_ranges < kCompletionChunkRanges &&
-             range_count(refs[end]) <= kCompletionChunkRanges - chunk_ranges) {
-        chunk_ranges += range_count(refs[end++]);
-      }
-      const uint64_t apply_start =
-          db_->immutable_db_options_.clock->NowMicros();
-      uint64_t ranges = 0, queued = 0;
-      for (size_t i = begin; i < end; ++i) {
-        auto& ref = refs[i];
-        auto& group = *ref.group;
-        const size_t task_ranges = range_count(ref);
-        ranges += task_ranges;
-        if (apply_start >= group.queued_micros)
-          queued += (apply_start - group.queued_micros) * task_ranges;
-        Status status = db_->AsyncCommitStatus(false);
-        if (status.ok()) {
-          TEST_SYNC_POINT_CALLBACK("DBImpl::AsyncWriteImpl:BeforeApply",
-                                   group.apply_batch);
-          status = db_->AsyncCommitStatus(false);
-          if (status.ok()) {
-            if (group.exclusive || group.serial) {
-              for (size_t r = 0; r < group.ranges.size() && status.ok(); ++r)
-                status = db_->ApplyAsyncCommitRange(group, r, false);
-            } else {
-              status =
-                  db_->ApplyAsyncCommitRange(group, ref.index, workers_ > 1);
-            }
-          }
-          TEST_SYNC_POINT_CALLBACK("DBImpl::AsyncWriteImpl:ApplyStatus",
-                                   &status);
-          if (!status.ok()) {
-            db_->FailAsyncCommit(status);
-            InstrumentedMutexLock db_lock(&db_->mutex_);
-            db_->error_handler_
-                .SetBGError(status, BackgroundErrorReason::kMemTable)
-                .PermitUncheckedError();
-          }
-        }
-      }
-      leased_ranges_.fetch_add(ranges, std::memory_order_relaxed);
-      queue_micros_.fetch_add(queued, std::memory_order_relaxed);
-      if (workers_ != 1) {
-        InstrumentedMutexLock db_lock(&db_->mutex_);
-        AsyncCommitGroup* previous = nullptr;
-        for (size_t i = begin; i < end; ++i) {
-          if (refs[i].group.get() != previous) {
-            previous = refs[i].group.get();
-            db_->ScheduleAsyncCommitTargets(*previous);
-          }
-        }
-      }
-      const uint64_t apply_end = db_->immutable_db_options_.clock->NowMicros();
-      if (apply_end >= apply_start)
-        apply_micros_.fetch_add(apply_end - apply_start,
-                                std::memory_order_relaxed);
-      Complete(refs.data() + begin, end - begin);
-      begin = end;
+    for (size_t i = 0; i < count; ++i) {
+      auto& group = *refs[i].group;
+      WaitForFence(refs[i]);
+      ApplyGroup(group);
+      // Fetching multiple groups never delays an earlier group's completion.
+      Complete(refs[i].group);
     }
   }
+}
+
+void AsyncCommitExecutor::RunSerial(size_t worker) {
+  AsyncCommitTask pending;
+  // Keep task ownership until cleanup. Reuse the arrays across leases.
+  std::vector<AsyncCommitTask> tasks;
+  std::vector<AsyncCommitGroup*> groups;
+  for (;;) {
+    AsyncCommitTask first;
+    if (pending.group)
+      first = std::move(pending);
+    else if (!TakeOrWait(worker, &first))
+      return;
+
+    // Bound this lease by the producer's current submission ticket. A producer
+    // can reserve a ticket just before linking its node; never wait for it.
+    const uint64_t ready_through = LastSubmitted();
+    tasks.push_back(std::move(first));
+    groups.push_back(tasks.back().group.get());
+    while (!groups.front()->exclusive &&
+           groups.back()->group_id < ready_through) {
+      AsyncCommitTask next;
+      if (!queue_.TryPop(worker, &next)) break;
+      if (next.group->exclusive ||
+          next.group->previous_barrier != groups.front()->previous_barrier) {
+        pending = std::move(next);
+        break;
+      }
+      tasks.push_back(std::move(next));
+      groups.push_back(tasks.back().group.get());
+    }
+    lease_batches_.fetch_add(1, std::memory_order_relaxed);
+    WaitForFence(tasks.front());
+
+    for (auto* group : groups) {
+      ApplyGroup(*group);
+      SequenceNumber previous, published;
+      {
+        std::lock_guard<std::mutex> lock(db_->async_commit_mutex_);
+        TEST_SYNC_POINT("AsyncCommitExecutor::Complete:Locked");
+        previous = db_->versions_->LastSequence();
+        PublishCompletedGroup(*group);
+        published = db_->versions_->LastSequence();
+      }
+      db_->SignalAsyncCommitPublication(previous, published);
+    }
+
+    TEST_SYNC_POINT("AsyncCommitExecutor::RunSerial:BeforeRelease");
+    db_->ReleaseAsyncCommitResources(groups.data(), groups.size());
+    {
+      std::lock_guard<std::mutex> lock(db_->async_commit_mutex_);
+      RetireCleanedGroups(groups.data(), groups.size());
+    }
+    db_->async_commit_cv_.notify_all();
+    groups.clear();
+    tasks.clear();
+  }
+}
+
+void AsyncCommitExecutor::ApplyGroup(AsyncCommitGroup& group) {
+  const uint64_t apply_start = db_->immutable_db_options_.clock->NowMicros();
+  const size_t ranges = group.ranges.size();
+  leased_ranges_.fetch_add(ranges, std::memory_order_relaxed);
+  leased_bytes_.fetch_add(WriteBatchInternal::ByteSize(group.apply_batch) -
+                              WriteBatchInternal::kHeader,
+                          std::memory_order_relaxed);
+  if (apply_start >= group.queued_micros)
+    queue_micros_.fetch_add((apply_start - group.queued_micros) * ranges,
+                            std::memory_order_relaxed);
+  Status status;
+  if (db_->async_commit_wait_stopped_.load(std::memory_order_acquire))
+    status = db_->AsyncCommitStatus(false);
+  if (status.ok()) {
+    TEST_SYNC_POINT_CALLBACK("DBImpl::AsyncWriteImpl:BeforeApply",
+                             group.apply_batch);
+    if (db_->async_commit_wait_stopped_.load(std::memory_order_acquire))
+      status = db_->AsyncCommitStatus(false);
+    if (status.ok()) {
+      for (size_t r = 0; r < ranges && status.ok(); ++r)
+        status = db_->ApplyAsyncCommitRange(group, r,
+                                            workers_ > 1 && !group.exclusive);
+    }
+    TEST_SYNC_POINT_CALLBACK("DBImpl::AsyncWriteImpl:ApplyStatus", &status);
+    if (!status.ok()) {
+      db_->FailAsyncCommit(status);
+      InstrumentedMutexLock db_lock(&db_->mutex_);
+      db_->error_handler_.SetBGError(status, BackgroundErrorReason::kMemTable)
+          .PermitUncheckedError();
+    }
+  }
+  const uint64_t apply_end = db_->immutable_db_options_.clock->NowMicros();
+  if (apply_end >= apply_start)
+    apply_micros_.fetch_add(apply_end - apply_start, std::memory_order_relaxed);
 }
 
 void AsyncCommitExecutor::Complete(
     const std::shared_ptr<AsyncCommitGroup>& group) {
-  AsyncCommitTask task(group, 0);
-  Complete(&task, 1);
+  assert(workers_ > 1);
+  db_->ReleaseAsyncCommitResources(group.get());
+  db_->async_commit_sequence_notifier_->SubmitCompleted(group);
 }
 
-void AsyncCommitExecutor::Complete(const AsyncCommitTask* tasks, size_t count) {
-  assert(count <= 64);
-  std::array<AsyncCommitGroup*, 64> groups;
-  size_t completed = 0;
+void AsyncCommitExecutor::PublishCompletedGroup(const AsyncCommitGroup& group) {
+  if (!db_->async_commit_error_.ok()) return;
+  assert(group.queued && group.group_id == published_ticket_ + 1);
+  assert(group.last_sequence >= db_->versions_->LastSequence());
+  db_->versions_->SetLastSequence(group.last_sequence);
+  published_ticket_ = group.group_id;
+}
+
+void AsyncCommitExecutor::RetireCleanedGroups(AsyncCommitGroup* const* groups,
+                                              size_t count) {
+  size_t reserved = 0;
+  uint64_t ticket = drained_ticket_;
   for (size_t i = 0; i < count; ++i) {
-    auto* group = tasks[i].group.get();
-    if (group->remaining.fetch_sub(1, std::memory_order_acq_rel) == 1)
-      groups[completed++] = group;
+    auto* group = groups[i];
+    assert(group->queued && group->group_id == ticket + 1);
+    ticket = group->group_id;
+    reserved += group->reserved_bytes;
+    group->reserved_bytes = 0;
   }
-  if (completed == 0) return;
-  db_->ReleaseAsyncCommitResources(groups.data(), completed);
-  SequenceNumber previous, published;
-  {
-    std::lock_guard<std::mutex> lock(db_->async_commit_mutex_);
-    previous = db_->versions_->LastSequence();
-    TEST_SYNC_POINT("AsyncCommitExecutor::Complete:Locked");
-    for (size_t i = 0; i < completed; ++i) {
-      auto* group = groups[i];
-      const size_t metadata = group->MetadataBytes();
-      assert(group->reserved_bytes >= metadata);
-      db_->async_commit_pending_bytes_ -= group->reserved_bytes - metadata;
-      group->reserved_bytes = metadata;
-      group->complete = true;
-    }
-    while (head_ && head_->complete) {
-      auto retired = head_;
-      head_ = std::move(retired->next);
-      if (!head_) tail_.reset();
-      if (retired->queued) {
-        if (db_->async_commit_error_.ok()) {
-          assert(retired->last_sequence >= db_->versions_->LastSequence());
-          db_->versions_->SetLastSequence(retired->last_sequence);
-        }
-        drained_.fetch_add(1, std::memory_order_relaxed);
-      }
-      drained_ticket_ = retired->group_id;
-      db_->async_commit_pending_bytes_ -= retired->reserved_bytes;
-      retired->reserved_bytes = 0;
-      --db_->async_commit_pending_groups_;
-    }
-    published = db_->versions_->LastSequence();
-  }
-  db_->async_commit_cv_.notify_all();
-  db_->SignalAsyncCommitPublication(previous, published);
+  assert(db_->async_commit_pending_bytes_ >= reserved);
+  assert(db_->async_commit_pending_groups_ >= count);
+  drained_ticket_ = ticket;
+  drained_.fetch_add(count, std::memory_order_relaxed);
+  db_->async_commit_pending_bytes_ -= reserved;
+  db_->async_commit_pending_groups_ -= count;
+}
+
+void AsyncCommitExecutor::RetireCompletedGroup(AsyncCommitGroup* group) {
+  assert(group->queued && group->group_id == drained_ticket_ + 1);
+  PublishCompletedGroup(*group);
+  RetireCleanedGroups(&group, 1);
 }
 }  // namespace ROCKSDB_NAMESPACE

@@ -150,6 +150,8 @@ DBOptions BuildDBOptions(const ImmutableDBOptions& immutable_db_options,
       immutable_db_options.async_commit_wait_spin_pause_multiplier;
   options.async_commit_memtable_threads =
       immutable_db_options.async_commit_memtable_threads;
+  options.async_commit_memtable_groups_per_fetch =
+      immutable_db_options.async_commit_memtable_groups_per_fetch;
   options.max_async_commit_pending_groups =
       immutable_db_options.max_async_commit_pending_groups;
   options.max_async_commit_pending_bytes =

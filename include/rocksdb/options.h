@@ -1096,6 +1096,12 @@ struct DBOptions {
   // allow_concurrent_memtable_write. Immutable. Default: 0.
   int async_commit_memtable_threads = 0;
 
+  // Maximum ready WAL groups fetched by each worker in a multi-worker pool.
+  // A single worker fetches the ready prefix before the next Merge fence,
+  // publishes each group after apply, and cleans up the whole fetch together.
+  // Range: [1,64]. Immutable. Default: 1.
+  uint32_t async_commit_memtable_groups_per_fetch = 1;
+
   // Maximum reserved/queued/running/unretired groups in worker-pool mode,
   // including empty and LogData-only groups. Must be positive. Immutable.
   size_t max_async_commit_pending_groups = 4096;

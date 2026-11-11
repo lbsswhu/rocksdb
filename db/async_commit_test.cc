@@ -194,6 +194,35 @@ TEST_F(AsyncCommitTest, PoolOptionsRoundTrip) {
   EXPECT_FALSE(db_->SetDBOptions({{"max_async_commit_pending_groups", "1"}}).ok());
 }
 
+TEST_F(AsyncCommitTest, GroupFetchOptionRoundTripAndValidation) {
+  DBOptions parsed;
+  ASSERT_OK(GetDBOptionsFromString(
+      DBOptions(),
+      "enable_async_commit=true;async_commit_memtable_threads=1;"
+      "async_commit_memtable_groups_per_fetch=4;",
+      &parsed));
+  Options options(parsed, ColumnFamilyOptions());
+  options.create_if_missing = true;
+  Reopen(options);
+  DBOptions loaded;
+  std::vector<ColumnFamilyDescriptor> columns;
+  ASSERT_OK(LoadLatestOptions(dbname_, env_, &loaded, &columns));
+  std::string serialized;
+  ASSERT_OK(GetStringFromDBOptions(&serialized, loaded));
+  EXPECT_NE(std::string::npos,
+            serialized.find("async_commit_memtable_groups_per_fetch=4"));
+  EXPECT_FALSE(
+      db_->SetDBOptions({{"async_commit_memtable_groups_per_fetch", "2"}})
+          .ok());
+  for (const char* value : {"0", "65"}) {
+    ASSERT_OK(GetDBOptionsFromString(
+        options, std::string("async_commit_memtable_groups_per_fetch=") + value,
+        &parsed));
+    static_cast<DBOptions&>(options) = parsed;
+    EXPECT_TRUE(TryReopen(options).IsInvalidArgument());
+  }
+}
+
 TEST_F(AsyncCommitTest, OptionsRoundTrip) {
   DBOptions parsed;
   ASSERT_OK(GetDBOptionsFromString(

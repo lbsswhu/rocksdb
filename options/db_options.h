@@ -75,6 +75,7 @@ struct ImmutableDBOptions {
   uint32_t async_commit_wait_spin_pause_multiplier;
   size_t max_async_commit_pending_bytes;
   int async_commit_memtable_threads;
+  uint32_t async_commit_memtable_groups_per_fetch;
   size_t max_async_commit_pending_groups;
   bool unordered_write;
   bool allow_concurrent_memtable_write;

@@ -20,16 +20,16 @@ class DBImpl;
 struct AsyncCommitGroup;
 struct AsyncCommitTask {
   std::shared_ptr<AsyncCommitGroup> group;
-  size_t index = 0;
   AsyncCommitTask() = default;
-  AsyncCommitTask(const std::shared_ptr<AsyncCommitGroup>& owner, size_t range)
-      : group(owner), index(range) {}
+  explicit AsyncCommitTask(const std::shared_ptr<AsyncCommitGroup>& owner)
+      : group(owner) {}
 };
 using AsyncCommitTaskQueue = AsyncCommitQueue<AsyncCommitTask>;
 
 // Stable storage, independent of every caller's Writer/batch/CF handle. Fields
-// complete/next are protected by DBImpl::async_commit_mutex_. Targets are
-// captured and released under the DB mutex, and never changed during insertion.
+// next is owned by the multi-worker notifier. completion_owner keeps a report
+// alive from preparation until the notifier takes ownership. Targets are
+// captured/released under the DB mutex and stay stable during insertion.
 struct AsyncCommitGroup {
   struct Range {
     size_t begin_offset;
@@ -56,16 +56,14 @@ struct AsyncCommitGroup {
   size_t record_count = 0;
   size_t reserved_bytes = 0;
   bool exclusive = false;
-  bool serial = false;
   uint64_t group_id = 0;
   uint64_t queued_micros = 0;
   std::shared_ptr<AsyncCommitGroup> next;
+  std::shared_ptr<AsyncCommitGroup> completion_owner;
+  AsyncCommitGroup* completion_next = nullptr;
   uint64_t previous_barrier = 0;
   AsyncCommitTaskQueue::Node* first_task = nullptr;
-  AsyncCommitTaskQueue::Node* last_task = nullptr;
-  std::atomic<size_t> remaining{0};
   bool queued = false;
-  bool complete = false;
   size_t MetadataBytes() const;
 };
 
@@ -81,9 +79,8 @@ inline size_t AsyncCommitGroup::MetadataBytes() const {
          4 * sizeof(std::shared_ptr<AsyncCommitGroup>);
 }
 
-// V3: pre-WAL preparation registers completion records under the async mutex.
-// Post-WAL publication and task dispatch use an independent lock-free FIFO.
-// Long-lived workers poll briefly before sleeping on an epoch-counted event.
+// One whole WAL group per work item. Single-worker completion publishes P
+// directly; multi-worker reports are ordered and published by the notifier.
 class AsyncCommitExecutor {
  public:
   explicit AsyncCommitExecutor(DBImpl* db);
@@ -92,28 +89,36 @@ class AsyncCommitExecutor {
   Status PrepareGroup(const std::shared_ptr<AsyncCommitGroup>& group);
   void CancelPreparedGroup(const std::shared_ptr<AsyncCommitGroup>& group);
   void SubmitPreparedGroup(const std::shared_ptr<AsyncCommitGroup>& group);
-  static size_t TaskStorageBytes(size_t ranges, bool whole_group);
+  static size_t TaskStorageBytes();
   uint64_t LastSubmitted();
   Status DrainThrough(uint64_t group_id);
   Status BeginShutdownAndDrain();
   void WakeAll();
+  void WakeOne();
   bool GetIntProperty(const Slice& name, uint64_t* value);
 
  private:
+  friend class AsyncCommitSequenceNotifier;
   void Run(size_t worker);
+  void RunSerial(size_t worker);
   bool TakeOrWait(size_t worker, AsyncCommitTask* task);
   void WaitForFence(const AsyncCommitTask& task);
+  void ApplyGroup(AsyncCommitGroup& group);
   void Complete(const std::shared_ptr<AsyncCommitGroup>& group);
-  void Complete(const AsyncCommitTask* tasks, size_t count);
+  // Caller holds async_commit_mutex_. Apply and visibility can precede cleanup.
+  void PublishCompletedGroup(const AsyncCommitGroup& group);
+  // Caller holds async_commit_mutex_ and has released all group resources.
+  void RetireCleanedGroups(AsyncCommitGroup* const* groups, size_t count);
+  void RetireCompletedGroup(AsyncCommitGroup* group);
   DBImpl* const db_;
   const size_t workers_;
   ThreadPoolImpl pool_;
   AsyncCommitTaskQueue queue_;
   AsyncCommitEvent event_;
-  std::shared_ptr<AsyncCommitGroup> head_, tail_;
-  uint64_t prepared_ = 0;  // producer only; completion links use async mutex
+  uint64_t prepared_ = 0;        // successful submissions, WAL producer only
   uint64_t last_exclusive_ = 0;  // producer only
   uint64_t drained_ticket_ = 0;  // async mutex
+  uint64_t published_ticket_ = 0;  // async mutex; includes zero-record groups
   size_t started_workers_ = 0;  // async mutex
   std::atomic<uint64_t> submitted_{0}, last_submitted_{0}, drained_{0};
   std::atomic<bool> accepting_{true}, stop_{false};
