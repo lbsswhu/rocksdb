@@ -50,7 +50,7 @@ work-ready 事件增加单个唤醒能力；默认一个新组最多唤醒一个
 
 ## worker 领取与完成
 
-配置名：`async_commit_memtable_groups_per_fetch`，默认 1，第一版范围 [1,64]，DB 打开后固定。含义是一次最多领取当前已经就绪的 N 个完整组；不等待凑满 N，不跨越 Merge 独占屏障。DBOptions、OPTIONS 解析/输出和 db_bench 参数一致接入。
+配置名：`async_memtable_write_groups_per_fetch`，默认 1，第一版范围 [1,64]，DB 打开后固定。含义是一次最多领取当前已经就绪的 N 个完整组；不等待凑满 N，不跨越 Merge 独占屏障。DBOptions、OPTIONS 解析/输出和 db_bench 参数一致接入。
 
 即使 N > 1，也必须依次对每组执行 apply→报告该组完成，然后处理下一组，不能恢复为整批 apply 后统一报告完成。领取数量与发布时机分开。
 

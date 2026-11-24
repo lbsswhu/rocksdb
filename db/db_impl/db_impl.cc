@@ -279,9 +279,10 @@ DBImpl::DBImpl(const DBOptions& options, const std::string& dbname,
   // is called by client and this seqnum is advanced.
   preserve_deletes_seqnum_.store(0);
 
-  if (immutable_db_options_.enable_async_commit) {
-    async_commit_wait_slots_.reset(
-        new AsyncCommitWaitSlot[immutable_db_options_.async_commit_wait_slots]);
+  if (immutable_db_options_.async_memtable_write) {
+    async_memtable_write_wait_slots_.reset(
+        new AsyncCommitWaitSlot[immutable_db_options_
+                                    .async_memtable_write_wait_slots]);
   }
   if (write_buffer_manager_) {
     wbm_stall_.reset(new WBMStallInterface());
@@ -525,7 +526,7 @@ Status DBImpl::CloseHelper() {
   // API callers are quiescent, but owned pool groups may still be running.
   // Keep publication enabled until the last acknowledged group is drained.
   Status async_close_status = StopAsyncCommitExecutor();
-  if (immutable_db_options_.enable_async_commit) {
+  if (immutable_db_options_.async_memtable_write) {
     {
       std::lock_guard<std::mutex> lock(async_commit_mutex_);
       async_commit_closing_ = true;
@@ -2946,7 +2947,7 @@ bool DBImpl::KeyMayExist(const ReadOptions& read_options,
 
 Iterator* DBImpl::NewIterator(const ReadOptions& read_options,
                               ColumnFamilyHandle* column_family) {
-  if (immutable_db_options_.enable_async_commit && read_options.tailing) {
+  if (immutable_db_options_.async_memtable_write && read_options.tailing) {
     return NewErrorIterator(Status::NotSupported(
         "async commit does not support tailing iterators"));
   }
@@ -3090,7 +3091,7 @@ Status DBImpl::NewIterators(
     const std::vector<ColumnFamilyHandle*>& column_families,
     std::vector<Iterator*>* iterators) {
   iterators->clear();
-  if (immutable_db_options_.enable_async_commit && read_options.tailing) {
+  if (immutable_db_options_.async_memtable_write && read_options.tailing) {
     return Status::NotSupported(
         "async commit does not support tailing iterators");
   }

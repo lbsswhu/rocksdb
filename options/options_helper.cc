@@ -137,25 +137,24 @@ DBOptions BuildDBOptions(const ImmutableDBOptions& immutable_db_options,
   options.enable_thread_tracking = immutable_db_options.enable_thread_tracking;
   options.delayed_write_rate = mutable_db_options.delayed_write_rate;
   options.enable_pipelined_write = immutable_db_options.enable_pipelined_write;
-  options.enable_async_commit = immutable_db_options.enable_async_commit;
-  options.async_commit_strong_visibility =
-      immutable_db_options.async_commit_strong_visibility;
-  options.async_commit_wait_slots =
-      immutable_db_options.async_commit_wait_slots;
-  options.async_commit_wait_spin_rounds =
-      immutable_db_options.async_commit_wait_spin_rounds;
-  options.async_commit_wait_spin_delay =
-      immutable_db_options.async_commit_wait_spin_delay;
-  options.async_commit_wait_spin_pause_multiplier =
-      immutable_db_options.async_commit_wait_spin_pause_multiplier;
-  options.async_commit_memtable_threads =
-      immutable_db_options.async_commit_memtable_threads;
-  options.async_commit_memtable_groups_per_fetch =
-      immutable_db_options.async_commit_memtable_groups_per_fetch;
-  options.max_async_commit_pending_groups =
-      immutable_db_options.max_async_commit_pending_groups;
-  options.max_async_commit_pending_bytes =
-      immutable_db_options.max_async_commit_pending_bytes;
+  options.async_memtable_write = immutable_db_options.async_memtable_write;
+  options.lazy_advance_sequence = immutable_db_options.lazy_advance_sequence;
+  options.async_memtable_write_wait_slots =
+      immutable_db_options.async_memtable_write_wait_slots;
+  options.async_memtable_write_wait_spin_rounds =
+      immutable_db_options.async_memtable_write_wait_spin_rounds;
+  options.async_memtable_write_wait_spin_delay =
+      immutable_db_options.async_memtable_write_wait_spin_delay;
+  options.async_memtable_write_wait_spin_pause_multiplier =
+      immutable_db_options.async_memtable_write_wait_spin_pause_multiplier;
+  options.async_memtable_write_threads =
+      immutable_db_options.async_memtable_write_threads;
+  options.async_memtable_write_groups_per_fetch =
+      immutable_db_options.async_memtable_write_groups_per_fetch;
+  options.max_async_memtable_write_pending_groups =
+      immutable_db_options.max_async_memtable_write_pending_groups;
+  options.max_async_memtable_write_pending_bytes =
+      immutable_db_options.max_async_memtable_write_pending_bytes;
   options.unordered_write = immutable_db_options.unordered_write;
   options.allow_concurrent_memtable_write =
       immutable_db_options.allow_concurrent_memtable_write;

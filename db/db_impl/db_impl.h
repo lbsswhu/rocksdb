@@ -2144,7 +2144,7 @@ class DBImpl : public DB {
     std::condition_variable cv;
     size_t waiters = 0;  // Protected by this slot's mutex.
   };
-  std::unique_ptr<AsyncCommitWaitSlot[]> async_commit_wait_slots_;
+  std::unique_ptr<AsyncCommitWaitSlot[]> async_memtable_write_wait_slots_;
   std::atomic<bool> async_commit_wait_stopped_{false};
   std::unique_ptr<AsyncCommitExecutor> async_commit_executor_;
   std::unique_ptr<AsyncCommitSequenceNotifier> async_commit_sequence_notifier_;

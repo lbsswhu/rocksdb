@@ -126,7 +126,7 @@ class DBBenchTest : public testing::Test {
 
 namespace {}  // namespace
 
-TEST_F(DBBenchTest, StrongVisibilityFlagPersistsEffectiveOptions) {
+TEST_F(DBBenchTest, EagerSequenceFlagPersistsEffectiveOptions) {
   GFLAGS_NAMESPACE::FlagSaver restore_flags;
   ResetArgs();
   AppendArgs({"./db_bench",
@@ -138,15 +138,15 @@ TEST_F(DBBenchTest, StrongVisibilityFlagPersistsEffectiveOptions) {
               "--threads=1",
               "--compression_type=none",
               "--sync=0",
-              "--enable_async_commit=1",
-              "--async_commit_strong_visibility=1",
-              "--async_commit_wait_slots=3",
-              "--async_commit_wait_spin_rounds=64",
-              "--async_commit_wait_spin_delay=7",
-              "--async_commit_wait_spin_pause_multiplier=13",
+              "--async_memtable_write=1",
+              "--lazy_advance_sequence=0",
+              "--async_memtable_write_wait_slots=3",
+              "--async_memtable_write_wait_spin_rounds=64",
+              "--async_memtable_write_wait_spin_delay=7",
+              "--async_memtable_write_wait_spin_pause_multiplier=13",
               "--enable_pipelined_write=0",
-              "--async_commit_memtable_threads=1",
-              "--async_commit_memtable_groups_per_fetch=4",
+              "--async_memtable_write_threads=1",
+              "--async_memtable_write_groups_per_fetch=4",
               "--allow_concurrent_memtable_write=0",
               "--histogram=0",
               "--report_file_operations=0",
@@ -160,14 +160,14 @@ TEST_F(DBBenchTest, StrongVisibilityFlagPersistsEffectiveOptions) {
   DBOptions loaded;
   std::vector<ColumnFamilyDescriptor> columns;
   ASSERT_OK(LoadLatestOptions(db_path_, Env::Default(), &loaded, &columns));
-  EXPECT_TRUE(loaded.async_commit_strong_visibility);
-  EXPECT_TRUE(loaded.enable_async_commit);
-  EXPECT_EQ(1, loaded.async_commit_memtable_threads);
-  EXPECT_EQ(4U, loaded.async_commit_memtable_groups_per_fetch);
-  EXPECT_EQ(3U, loaded.async_commit_wait_slots);
-  EXPECT_EQ(64U, loaded.async_commit_wait_spin_rounds);
-  EXPECT_EQ(7U, loaded.async_commit_wait_spin_delay);
-  EXPECT_EQ(13U, loaded.async_commit_wait_spin_pause_multiplier);
+  EXPECT_FALSE(loaded.lazy_advance_sequence);
+  EXPECT_TRUE(loaded.async_memtable_write);
+  EXPECT_EQ(1, loaded.async_memtable_write_threads);
+  EXPECT_EQ(4U, loaded.async_memtable_write_groups_per_fetch);
+  EXPECT_EQ(3U, loaded.async_memtable_write_wait_slots);
+  EXPECT_EQ(64U, loaded.async_memtable_write_wait_spin_rounds);
+  EXPECT_EQ(7U, loaded.async_memtable_write_wait_spin_delay);
+  EXPECT_EQ(13U, loaded.async_memtable_write_wait_spin_pause_multiplier);
   EXPECT_FALSE(loaded.enable_pipelined_write);
 }
 
@@ -176,8 +176,8 @@ TEST_F(DBBenchTest, AsyncAcknowledgmentTimingExcludesFinalDrain) {
   ResetArgs();
   AppendArgs({"./db_bench", "--benchmarks=fillrandom", "--options_file=",
               "--use_existing_db=0", "--num=100", "--duration=0", "--threads=1",
-              "--compression_type=none", "--sync=0", "--enable_async_commit=1",
-              "--enable_pipelined_write=1", "--async_commit_memtable_threads=1",
+              "--compression_type=none", "--sync=0",
+              "--enable_pipelined_write=1", "--async_memtable_write_threads=1",
               "--allow_concurrent_memtable_write=0", "--histogram=0",
               "--report_file_operations=0", "--db=" + db_path_});
   bool delayed = false;
@@ -263,6 +263,7 @@ const std::string options_file_content = R"OPTIONS_FILE(
   options_file_version=1.1
 
 [DBOptions]
+  async_memtable_write=false
   wal_bytes_per_sync=1048576
   delete_obsolete_files_period_micros=0
   WAL_ttl_seconds=0

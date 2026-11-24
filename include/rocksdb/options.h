@@ -1044,36 +1044,40 @@ struct DBOptions {
   // Default: false
   bool enable_pipelined_write = false;
 
-  // Experimental WAL acknowledgment mode. With zero memtable workers, the
+  // Experimental asynchronous memtable writes. With zero memtable workers, the
   // original leader applies each group; followers return after WAL success.
   // With a worker pool, every caller may return after WAL regardless of
-  // enable_pipelined_write, unless async_commit_strong_visibility is enabled.
+  // enable_pipelined_write, unless lazy_advance_sequence is false.
   // The pool independently overlaps WAL/application.
   // A successful return inherits the durability of WriteOptions::sync. New
   // user read views capture the DB's allocated sequence at entry and wait for
   // that fixed target to be published, including writes from other threads.
   // Explicit snapshots and existing iterators keep their history.
   // Compatible with enable_pipelined_write. Immutable after opening the DB.
-  bool enable_async_commit = false;
+  // Default: true.
+  bool async_memtable_write = true;
 
-  // With async commit, wait for memtable sequence publication before returning
-  // success, for both the leader and followers. WAL and memtable execution
-  // remain decoupled; other WAL groups may advance while callers wait.
-  // Reads use normal published views without thread-local sequence waits.
-  // Does not change WriteOptions::sync durability semantics.
-  // Requires enable_async_commit and async_commit_memtable_threads > 0.
-  // Immutable after opening the DB. Default: false.
-  bool async_commit_strong_visibility = false;
+  // With asynchronous memtable writes, true allows callers to return after
+  // WAL success while memtable publication advances in the background. New
+  // user reads capture the allocated sequence once and wait for publication.
+  // False makes both the leader and followers wait for sequence publication
+  // before returning success; reads then use normal published views.
+  // WAL and memtable execution remain decoupled in both modes. This does not
+  // change WriteOptions::sync durability semantics or how P is published.
+  // False requires async_memtable_write and async_memtable_write_threads > 0.
+  // Immutable after opening the DB. Default: true.
+  bool lazy_advance_sequence = true;
 
   // Publication wait shards, selected by target sequence % slots. Applies to
-  // read waits and strong-visibility write waits. Range: [1, 1024]. Immutable.
-  uint32_t async_commit_wait_slots = 32;
+  // read waits and write waits with lazy_advance_sequence=false.
+  // Range: [1, 1024]. Immutable.
+  uint32_t async_memtable_write_wait_slots = 32;
 
   // Maximum outer publication polls before blocking on a shard. Each failed
   // poll uses the randomized CPU delay configured below. Zero skips spin.
-  // Applies to read waits and strong-visibility write waits. No time budget
-  // or OS scheduler yield. Immutable. Default: 30.
-  uint32_t async_commit_wait_spin_rounds = 30;
+  // Applies to read waits and writes with lazy_advance_sequence=false. No time
+  // budget or OS scheduler yield. Immutable. Default: 30.
+  uint32_t async_memtable_write_wait_spin_rounds = 30;
 
   // Draw a thread-local pseudo-random delay in [0, delay) per spin round.
   // Execute delay_sample * pause_multiplier consecutive CPU pauses before
@@ -1081,30 +1085,30 @@ struct DBOptions {
   // Without a read deadline the delay does not read a clock. Explicit
   // deadlines interrupt long delays in chunks of at most 64 CPU pauses.
   // Immutable. Ranges: delay [0, 1000], multiplier [0, 100]. Defaults: 6, 50.
-  uint32_t async_commit_wait_spin_delay = 6;
-  uint32_t async_commit_wait_spin_pause_multiplier = 50;
+  uint32_t async_memtable_write_wait_spin_delay = 6;
+  uint32_t async_memtable_write_wait_spin_pause_multiplier = 50;
 
   // Bounds the additional group buffers/metadata retained by async commit.
   // Without a pool a single-request payload is borrowed. With a pool all
   // payloads are owned and charged, including single-request groups.
   // An oversized group can proceed alone. Must be nonzero when async is on.
   // Immutable. Default: 64 MiB.
-  size_t max_async_commit_pending_bytes = 64 * 1024 * 1024;
+  size_t max_async_memtable_write_pending_bytes = 64 * 1024 * 1024;
 
   // Dedicated DB memtable workers. Zero preserves leader-applied async commit.
-  // Requires enable_async_commit; values > 1 also require
+  // Requires async_memtable_write; values > 1 also require
   // allow_concurrent_memtable_write. Immutable. Default: 0.
-  int async_commit_memtable_threads = 0;
+  int async_memtable_write_threads = 0;
 
   // Maximum ready WAL groups fetched by each worker in a multi-worker pool.
   // A single worker fetches the ready prefix before the next Merge fence,
   // publishes each group after apply, and cleans up the whole fetch together.
   // Range: [1,64]. Immutable. Default: 1.
-  uint32_t async_commit_memtable_groups_per_fetch = 1;
+  uint32_t async_memtable_write_groups_per_fetch = 1;
 
   // Maximum reserved/queued/running/unretired groups in worker-pool mode,
   // including empty and LogData-only groups. Must be positive. Immutable.
-  size_t max_async_commit_pending_groups = 4096;
+  size_t max_async_memtable_write_pending_groups = 4096;
 
   // Setting unordered_write to true trades higher write throughput with
   // relaxing the immutability guarantee of snapshots. This violates the

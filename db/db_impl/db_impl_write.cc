@@ -110,7 +110,7 @@ Status DBImpl::WriteImpl(const WriteOptions& write_options,
     }
   }
 
-  if (immutable_db_options_.enable_async_commit) {
+  if (immutable_db_options_.async_memtable_write) {
     if (write_options.disableWAL || write_options.timestamp != nullptr ||
         callback != nullptr || pre_release_callback != nullptr ||
         disable_memtable || log_ref != 0 || batch_cnt != 0 || seq_per_batch_ ||
@@ -118,7 +118,7 @@ Status DBImpl::WriteImpl(const WriteOptions& write_options,
         !my_batch->GetWalTerminationPoint().is_cleared() ||
         WriteBatchInternal::IsLatestPersistentState(my_batch)) {
       return Status::NotSupported(
-          "unsupported enable_async_commit write request");
+          "unsupported async_memtable_write write request");
     }
     return AsyncWriteImpl(write_options, my_batch, log_used, seq_used);
   }
@@ -958,7 +958,7 @@ Status DBImpl::PreprocessWrite(const WriteOptions& write_options,
   }
 
   if (UNLIKELY(status.ok() && !trim_history_scheduler_.Empty())) {
-    if (immutable_db_options_.enable_async_commit) {
+    if (immutable_db_options_.async_memtable_write) {
       WaitForPendingWrites();
       status = AsyncCommitStatus();
     }

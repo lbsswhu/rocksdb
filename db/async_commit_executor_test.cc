@@ -61,11 +61,11 @@ class AsyncCommitExecutorTest : public DBTestBase,
     Options options;
     options.env = env_;
     options.create_if_missing = true;
-    options.enable_async_commit = true;
+    options.async_memtable_write = true;
     options.enable_pipelined_write = (GetParam() & 1) != 0;
-    options.async_commit_memtable_threads = 1 << (GetParam() / 4);
+    options.async_memtable_write_threads = 1 << (GetParam() / 4);
     options.allow_concurrent_memtable_write =
-        options.async_commit_memtable_threads > 1;
+        options.async_memtable_write_threads > 1;
     return options;
   }
   WriteOptions Writes() {
@@ -74,10 +74,10 @@ class AsyncCommitExecutorTest : public DBTestBase,
     options.memtable_insert_hint_per_batch = true;
     return options;
   }
-  Status EnableStrongVisibility(Options* options) {
+  Status DisableLazyAdvanceSequence(Options* options) {
     DBOptions parsed;
     Status status = GetDBOptionsFromString(
-        *options, "async_commit_strong_visibility=true;", &parsed);
+        *options, "lazy_advance_sequence=false;", &parsed);
     if (status.ok()) static_cast<DBOptions&>(*options) = parsed;
     return status;
   }
@@ -103,8 +103,8 @@ class AsyncCommitExecutorTest : public DBTestBase,
 // branch to reproduce the two allocation assertions.
 TEST(AsyncWalStateWaitTest, SerialFollowersUseSharedBlockingWait) {
   Options options;
-  options.enable_async_commit = true;
-  options.async_commit_memtable_threads = 1;
+  options.async_memtable_write = true;
+  options.async_memtable_write_threads = 1;
   options.enable_write_thread_adaptive_yield = false;
   WriteThread queue{ImmutableDBOptions(options)};
   WriteBatch batches[3];
@@ -152,8 +152,8 @@ TEST(AsyncWalStateWaitTest, CompletionAcrossBlockingRegistration) {
                            "WriteThread::AsyncWALWait:BeforeWait"}) {
     for (bool fail : {false, true}) {
       Options options;
-      options.enable_async_commit = true;
-      options.async_commit_memtable_threads = 1;
+      options.async_memtable_write = true;
+      options.async_memtable_write_threads = 1;
       options.enable_write_thread_adaptive_yield = false;
       WriteThread queue{ImmutableDBOptions(options)};
       WriteBatch batch;
@@ -193,8 +193,8 @@ TEST(AsyncWalStateWaitTest, CompletionAcrossBlockingRegistration) {
 // whose own completion predicate is not ready yet.
 TEST(AsyncWalStateWaitTest, NextLeaderRunsBeforeFollowerNotification) {
   Options options;
-  options.enable_async_commit = true;
-  options.async_commit_memtable_threads = 1;
+  options.async_memtable_write = true;
+  options.async_memtable_write_threads = 1;
   options.enable_write_thread_adaptive_yield = false;
   WriteThread queue{ImmutableDBOptions(options)};
   WriteBatch batch;
@@ -239,10 +239,10 @@ TEST(AsyncWalStateWaitTest, NextLeaderRunsBeforeFollowerNotification) {
 // management drain must still wait until the whole batch releases its refs.
 TEST_P(AsyncCommitExecutorTest, SerialWorkerPublishesBeforeLeaseFinishes) {
   Options options = PoolOptions();
-  options.async_commit_memtable_threads = 1;
-  options.async_commit_memtable_groups_per_fetch = 1;
+  options.async_memtable_write_threads = 1;
+  options.async_memtable_write_groups_per_fetch = 1;
   options.allow_concurrent_memtable_write = false;
-  options.async_commit_wait_spin_rounds = 0;
+  options.async_memtable_write_wait_spin_rounds = 0;
   DestroyAndReopen(options);
   PoolEvent first, release_first, last, release_last, cleaning, release_batch;
   PoolEvent reader_waiting, read_done, drain_waiting, drain_done;
@@ -319,7 +319,7 @@ TEST_P(AsyncCommitExecutorTest, SerialWorkerPublishesBeforeLeaseFinishes) {
 
 TEST_P(AsyncCommitExecutorTest, SerialBatchFailureKeepsPublishedPrefix) {
   Options options = PoolOptions();
-  options.async_commit_memtable_threads = 1;
+  options.async_memtable_write_threads = 1;
   options.allow_concurrent_memtable_write = false;
   options.avoid_flush_during_shutdown = true;
   DestroyAndReopen(options);
@@ -364,7 +364,7 @@ TEST_P(AsyncCommitExecutorTest, SerialBatchFailureKeepsPublishedPrefix) {
 TEST_P(AsyncCommitExecutorTest, NotifierOwnsOnlyMultiWorkerPublication) {
   for (int workers : {1, 2}) {
     Options options = PoolOptions();
-    options.async_commit_memtable_threads = workers;
+    options.async_memtable_write_threads = workers;
     options.allow_concurrent_memtable_write = workers > 1;
     Close();
     PoolEvent idle, resume, inserted, drained;
@@ -404,8 +404,8 @@ TEST_P(AsyncCommitExecutorTest, NotifierOwnsOnlyMultiWorkerPublication) {
 
 TEST_P(AsyncCommitExecutorTest, NotifierClosesHoleAcrossMetadataGroup) {
   Options options = PoolOptions();
-  options.async_commit_memtable_threads =
-      std::max(2, options.async_commit_memtable_threads);
+  options.async_memtable_write_threads =
+      std::max(2, options.async_memtable_write_threads);
   options.allow_concurrent_memtable_write = true;
   DestroyAndReopen(options);
   PoolEvent first, release_first, last_received;
@@ -455,7 +455,7 @@ TEST_P(AsyncCommitExecutorTest, NotifierClosesHoleAcrossMetadataGroup) {
 // an already completed prefix until the very last 64-record notification turn.
 TEST_P(AsyncCommitExecutorTest, NotifierPublishesBeforeBacklogIsExhausted) {
   Options options = PoolOptions();
-  options.async_commit_memtable_threads = 2;
+  options.async_memtable_write_threads = 2;
   options.allow_concurrent_memtable_write = true;
   Close();
   PoolEvent idle, start, all_reported, next_turn, resume;
@@ -582,7 +582,7 @@ TEST_P(AsyncCommitExecutorTest, OwnedGroupUsesOneQueueNode) {
 // ordinary foreground writes switch full memtables without an explicit Flush.
 TEST_P(AsyncCommitExecutorTest, SerialWorkerSchedulesAutomaticFlush) {
   Options options = PoolOptions();
-  options.async_commit_memtable_threads = 1;
+  options.async_memtable_write_threads = 1;
   options.allow_concurrent_memtable_write = false;
   options.write_buffer_size = 65536;
   options.max_write_buffer_number = 4;
@@ -623,6 +623,101 @@ TEST_P(AsyncCommitExecutorTest, ReadWaitsForOtherThreadsAllocatedSequence) {
   sp->DisableProcessing();
   sp->ClearAllCallBacks();
   EXPECT_EQ("value", Get("pending"));
+}
+
+// An already published snapshot must remain readable while later writes are
+// paused. Waiting for the current allocated sequence makes the reader block.
+TEST_P(AsyncCommitExecutorTest, SnapshotReadsIgnoreLaterAllocatedSequences) {
+  Reopen(PoolOptions());
+  ASSERT_OK(db_->Put(Writes(), "existing", "old"));
+  const Snapshot* older = db_->GetSnapshot();
+  ASSERT_NE(nullptr, older);
+  ASSERT_OK(db_->Put(Writes(), "published", "value"));
+  const Snapshot* latest = db_->GetSnapshot();
+  ASSERT_NE(nullptr, latest);
+  ASSERT_EQ(1U, older->GetSequenceNumber());
+  ASSERT_EQ(2U, latest->GetSequenceNumber());
+  ASSERT_EQ(2U, db_->GetLatestSequenceNumber());
+
+  PoolEvent applying, release, read_done;
+  auto* sp = SyncPoint::GetInstance();
+  sp->SetCallBack("DBImpl::AsyncWriteImpl:BeforeApply", [&](void*) {
+    applying.Set();
+    EXPECT_TRUE(release.Wait());
+  });
+  sp->EnableProcessing();
+  WriteBatch pending;
+  ASSERT_OK(pending.Put("existing", "new"));
+  ASSERT_OK(pending.Put("pending", "new"));
+  EXPECT_OK(db_->Write(Writes(), &pending));
+  EXPECT_TRUE(applying.Wait());
+
+  std::thread reader([&] {
+    // Cover both S < P and S == P, with an unpublished newer write group.
+    for (const Snapshot* snapshot : {older, latest}) {
+      SCOPED_TRACE(snapshot->GetSequenceNumber());
+      ReadOptions read;
+      read.snapshot = snapshot;
+      std::string value;
+      EXPECT_OK(db_->Get(read, "existing", &value));
+      EXPECT_EQ("old", value);
+      EXPECT_TRUE(db_->Get(read, "pending", &value).IsNotFound());
+
+      const Slice keys[] = {Slice("existing"), Slice("pending")};
+      std::vector<std::string> values;
+      auto statuses = db_->MultiGet(read, {keys[0], keys[1]}, &values);
+      EXPECT_OK(statuses[0]);
+      EXPECT_EQ("old", values[0]);
+      EXPECT_TRUE(statuses[1].IsNotFound());
+
+      PinnableSlice pinned[2];
+      Status batched_status[2];
+      db_->MultiGet(read, db_->DefaultColumnFamily(), 2, keys, pinned,
+                    batched_status);
+      EXPECT_OK(batched_status[0]);
+      EXPECT_EQ("old", pinned[0].ToString());
+      EXPECT_TRUE(batched_status[1].IsNotFound());
+
+      bool found = false;
+      EXPECT_TRUE(db_->KeyMayExist(read, db_->DefaultColumnFamily(), "existing",
+                                   &value, &found));
+      EXPECT_TRUE(found);
+      EXPECT_EQ("old", value);
+
+      std::unique_ptr<Iterator> iter(db_->NewIterator(read));
+      iter->Seek("existing");
+      EXPECT_OK(iter->status());
+      EXPECT_TRUE(iter->Valid());
+      if (iter->Valid()) {
+        EXPECT_EQ("old", iter->value().ToString());
+      }
+      std::vector<Iterator*> iterators;
+      EXPECT_OK(
+          db_->NewIterators(read, {db_->DefaultColumnFamily()}, &iterators));
+      EXPECT_EQ(1U, iterators.size());
+      for (auto* iterator : iterators) {
+        iterator->Seek("existing");
+        EXPECT_OK(iterator->status());
+        EXPECT_TRUE(iterator->Valid());
+        if (iterator->Valid()) {
+          EXPECT_EQ("old", iterator->value().ToString());
+        }
+        delete iterator;
+      }
+    }
+    read_done.Set();
+  });
+  EXPECT_TRUE(read_done.Wait(std::chrono::seconds(1)));
+  EXPECT_EQ(2U, db_->GetLatestSequenceNumber());
+  release.Set();
+  reader.join();
+  EXPECT_OK(dbfull()->WaitForAsyncCommit());
+  sp->DisableProcessing();
+  sp->ClearAllCallBacks();
+  EXPECT_EQ("new", Get("existing"));
+  db_->ReleaseSnapshot(older);
+  db_->ReleaseSnapshot(latest);
+  ExpectDrained();
 }
 
 // Capturing A only after WAL success would let this reader miss an in-flight
@@ -705,7 +800,7 @@ TEST_P(AsyncCommitExecutorTest, ReadTargetDoesNotChaseLaterAllocations) {
 TEST_P(AsyncCommitExecutorTest,
        WorkerContinuesWhilePublicationNotificationIsBlocked) {
   Options options = PoolOptions();
-  options.async_commit_wait_spin_rounds = 0;
+  options.async_memtable_write_wait_spin_rounds = 0;
   Reopen(options);
   PoolEvent applying, release_apply, waiting, notifying, release_notify;
   PoolEvent next_applied;
@@ -762,7 +857,7 @@ TEST_P(AsyncCommitExecutorTest, NotifierProgressBeforeSleepIsNotLost) {
        {"AsyncCommitSequenceNotifier::Run:ProgressRegistered",
         "AsyncCommitSequenceNotifier::Run:BeforeProgressWait"}) {
     Options options = PoolOptions();
-    options.async_commit_wait_spin_rounds = 0;
+    options.async_memtable_write_wait_spin_rounds = 0;
     Reopen(options);
     PoolEvent applying, release_apply, registered, resume, read_done;
     PoolEvent reported;
@@ -793,7 +888,7 @@ TEST_P(AsyncCommitExecutorTest, NotifierProgressBeforeSleepIsNotLost) {
     });
     EXPECT_TRUE(registered.Wait());
     release_apply.Set();
-    if (options.async_commit_memtable_threads > 1) {
+    if (options.async_memtable_write_threads > 1) {
       EXPECT_TRUE(reported.Wait());
       resume.Set();
     }
@@ -813,7 +908,7 @@ TEST_P(AsyncCommitExecutorTest, FirstWaiterActivatesIdleNotifier) {
        {"AsyncCommitSequenceNotifier::Run:IdleRegistered",
         "AsyncCommitSequenceNotifier::Run:BeforeIdleWait"}) {
     Options options = PoolOptions();
-    options.async_commit_wait_spin_rounds = 0;
+    options.async_memtable_write_wait_spin_rounds = 0;
     Close();
     PoolEvent idle, resume, applying, release_apply, waiting, read_done;
     PoolEvent reported;
@@ -848,7 +943,7 @@ TEST_P(AsyncCommitExecutorTest, FirstWaiterActivatesIdleNotifier) {
     });
     EXPECT_TRUE(waiting.Wait());
     release_apply.Set();
-    if (options.async_commit_memtable_threads > 1) {
+    if (options.async_memtable_write_threads > 1) {
       EXPECT_TRUE(reported.Wait());
       resume.Set();
     }
@@ -867,10 +962,10 @@ TEST_P(AsyncCommitExecutorTest, FirstWaiterActivatesIdleNotifier) {
 TEST_P(AsyncCommitExecutorTest, NotifierKeepsSnapshotAcrossSlotCycle) {
   Options options = PoolOptions();
   // Only a direct publisher can advance P while this notifier is blocked.
-  options.async_commit_memtable_threads = 1;
+  options.async_memtable_write_threads = 1;
   options.allow_concurrent_memtable_write = false;
-  options.async_commit_wait_slots = 3;
-  options.async_commit_wait_spin_rounds = 0;
+  options.async_memtable_write_wait_slots = 3;
+  options.async_memtable_write_wait_spin_rounds = 0;
   DestroyAndReopen(options);
   PoolEvent first_apply, release_first, second_apply, release_second;
   PoolEvent first_wait, second_wait, notifying, resume, second_done;
@@ -939,7 +1034,7 @@ TEST_P(AsyncCommitExecutorTest, NotifierKeepsSnapshotAcrossSlotCycle) {
 TEST_P(AsyncCommitExecutorTest,
        WeakWritesLeaveNotifierIdleAndTimeoutReturnsToIdle) {
   Options options = PoolOptions();
-  options.async_commit_wait_spin_rounds = 0;
+  options.async_memtable_write_wait_spin_rounds = 0;
   Close();
   PoolEvent idle, idle_again, applying, release_apply;
   std::atomic<unsigned> idles{0}, scans{0}, progress_waits{0};
@@ -1020,8 +1115,8 @@ TEST_P(AsyncCommitExecutorTest, NotifierStopWakesBothEvents) {
 
 TEST_P(AsyncCommitExecutorTest, WorkerZeroDoesNotWaitForReaderNotification) {
   Options options = PoolOptions();
-  options.async_commit_memtable_threads = 0;
-  options.async_commit_wait_spin_rounds = 0;
+  options.async_memtable_write_threads = 0;
+  options.async_memtable_write_wait_spin_rounds = 0;
   Reopen(options);
   PoolEvent applying, release_apply, waiting, notifying, resume, writer_done;
   std::atomic<bool> blocked{false};
@@ -1068,7 +1163,7 @@ TEST_P(AsyncCommitExecutorTest, WorkerZeroDoesNotWaitForReaderNotification) {
 // strand it, even when the publisher sees no registered waiters.
 TEST_P(AsyncCommitExecutorTest, PublicationBeforeSlotLockIsNotLost) {
   Options options = PoolOptions();
-  options.async_commit_wait_spin_rounds = 0;
+  options.async_memtable_write_wait_spin_rounds = 0;
   Reopen(options);
   PoolEvent applying, release, before_lock, resume;
   auto* sp = SyncPoint::GetInstance();
@@ -1104,7 +1199,7 @@ TEST_P(AsyncCommitExecutorTest, PublicationBeforeSlotLockIsNotLost) {
 // loading a waiter count without a handshake loses this notification.
 TEST_P(AsyncCommitExecutorTest, PublicationBetweenPredicateAndSleepIsNotLost) {
   Options options = PoolOptions();
-  options.async_commit_wait_spin_rounds = 0;
+  options.async_memtable_write_wait_spin_rounds = 0;
   Reopen(options);
   PoolEvent applying, release, before_wait, resume, notifying;
   auto* sp = SyncPoint::GetInstance();
@@ -1146,9 +1241,10 @@ TEST_P(AsyncCommitExecutorTest, RandomSpinDelayGroupsPauses) {
     DBOptions parsed;
     ASSERT_OK(GetDBOptionsFromString(
         options,
-        "async_commit_wait_spin_rounds=4294967295;"
-        "async_commit_wait_spin_delay=2;"
-        "async_commit_wait_spin_pause_multiplier=4;", &parsed));
+        "async_memtable_write_wait_spin_rounds=4294967295;"
+        "async_memtable_write_wait_spin_delay=2;"
+        "async_memtable_write_wait_spin_pause_multiplier=4;",
+        &parsed));
     static_cast<DBOptions&>(options) = parsed;
     DestroyAndReopen(options);
     PoolEvent applying, release;
@@ -1208,10 +1304,13 @@ TEST_P(AsyncCommitExecutorTest, RandomSpinDelayRangeAndZeroSettings) {
     Options options = PoolOptions();
     DBOptions parsed;
     ASSERT_OK(GetDBOptionsFromString(
-        options, "async_commit_wait_spin_rounds=3;async_commit_wait_spin_delay=" +
-                     std::to_string(setting.first) +
-                     ";async_commit_wait_spin_pause_multiplier=" +
-                     std::to_string(setting.second), &parsed));
+        options,
+        "async_memtable_write_wait_spin_rounds=3;async_memtable_write_wait_"
+        "spin_delay=" +
+            std::to_string(setting.first) +
+            ";async_memtable_write_wait_spin_pause_multiplier=" +
+            std::to_string(setting.second),
+        &parsed));
     static_cast<DBOptions&>(options) = parsed;
     Reopen(options);
     PoolEvent applying, release;
@@ -1259,9 +1358,11 @@ TEST_P(AsyncCommitExecutorTest, RandomSpinDelayDeadlineInterruptsInnerLoop) {
   Options options = PoolOptions();
   DBOptions parsed;
   ASSERT_OK(GetDBOptionsFromString(
-      options, "async_commit_wait_spin_rounds=4294967295;"
-               "async_commit_wait_spin_delay=1000;"
-               "async_commit_wait_spin_pause_multiplier=100;", &parsed));
+      options,
+      "async_memtable_write_wait_spin_rounds=4294967295;"
+      "async_memtable_write_wait_spin_delay=1000;"
+      "async_memtable_write_wait_spin_pause_multiplier=100;",
+      &parsed));
   static_cast<DBOptions&>(options) = parsed;
   SetTimeElapseOnlySleepOnReopen(&options);
   Reopen(options);
@@ -1304,7 +1405,8 @@ TEST_P(AsyncCommitExecutorTest, CountedSpinCanFinishWithoutBlocking) {
       Options options = PoolOptions();
       DBOptions parsed;
       ASSERT_OK(GetDBOptionsFromString(
-          options, "async_commit_wait_spin_rounds=" + std::to_string(rounds),
+          options,
+          "async_memtable_write_wait_spin_rounds=" + std::to_string(rounds),
           &parsed));
       static_cast<DBOptions&>(options) = parsed;
       Reopen(options);
@@ -1345,7 +1447,8 @@ TEST_P(AsyncCommitExecutorTest, CountedSpinExhaustionEntersCV) {
     Options options = PoolOptions();
     DBOptions parsed;
     ASSERT_OK(GetDBOptionsFromString(
-        options, "async_commit_wait_spin_rounds=" + std::to_string(rounds),
+        options,
+        "async_memtable_write_wait_spin_rounds=" + std::to_string(rounds),
         &parsed));
     static_cast<DBOptions&>(options) = parsed;
     Reopen(options);
@@ -1383,10 +1486,11 @@ TEST_P(AsyncCommitExecutorTest, CountedSpinHonorsDeadlineAtBoundaries) {
   // deadline until it is exhausted, including when no spin is configured.
   for (uint32_t rounds : {0U, 1U, 64U, 65U, 0xffffffffU}) {
     Options options = PoolOptions();
-    options.async_commit_wait_spin_delay = 0;
+    options.async_memtable_write_wait_spin_delay = 0;
     DBOptions parsed;
     ASSERT_OK(GetDBOptionsFromString(
-        options, "async_commit_wait_spin_rounds=" + std::to_string(rounds),
+        options,
+        "async_memtable_write_wait_spin_rounds=" + std::to_string(rounds),
         &parsed));
     static_cast<DBOptions&>(options) = parsed;
     SetTimeElapseOnlySleepOnReopen(&options);
@@ -1422,7 +1526,7 @@ TEST_P(AsyncCommitExecutorTest, CountedSpinHonorsDeadlineAtBoundaries) {
 
 TEST_P(AsyncCommitExecutorTest, CountedSpinCVHonorsDeadline) {
   Options options = PoolOptions();
-  options.async_commit_wait_spin_rounds = 0;
+  options.async_memtable_write_wait_spin_rounds = 0;
   Reopen(options);
   PoolEvent applying, release;
   unsigned blocked = 0;
@@ -1454,8 +1558,8 @@ TEST_P(AsyncCommitExecutorTest, PublicationAndErrorsWakeAllCoveredSlots) {
   for (uint32_t slots : {1U, 3U, 32U, 1024U}) {
     for (bool fail : {false, true}) {
       Options options = PoolOptions();
-      options.async_commit_wait_slots = slots;
-      options.async_commit_wait_spin_rounds = 0;
+      options.async_memtable_write_wait_slots = slots;
+      options.async_memtable_write_wait_spin_rounds = 0;
       DestroyAndReopen(options);
       PoolEvent applying, release;
       std::vector<std::unique_ptr<PoolEvent>> waiting;
@@ -1525,9 +1629,9 @@ TEST_P(AsyncCommitExecutorTest, PublicationAndErrorsWakeAllCoveredSlots) {
   }
 }
 
-TEST_P(AsyncCommitExecutorTest, StrongVisibilityWaitsForLeaderAndFollowers) {
+TEST_P(AsyncCommitExecutorTest, EagerSequenceWaitsForLeaderAndFollowers) {
   Options options = PoolOptions();
-  ASSERT_OK(EnableStrongVisibility(&options));
+  ASSERT_OK(DisableLazyAdvanceSequence(&options));
   Reopen(options);
   PoolEvent forming, form, follower_queued, applying, release, next_wal;
   PoolEvent leader_ack, follower_ack, next_ack;
@@ -1591,11 +1695,10 @@ TEST_P(AsyncCommitExecutorTest, StrongVisibilityWaitsForLeaderAndFollowers) {
   ExpectDrained();
 }
 
-TEST_P(AsyncCommitExecutorTest,
-       StrongVisibilityWaitsForEarlierGroupPublication) {
+TEST_P(AsyncCommitExecutorTest, EagerSequenceWaitsForEarlierGroupPublication) {
   Options options = PoolOptions();
-  if (options.async_commit_memtable_threads < 2) return;
-  ASSERT_OK(EnableStrongVisibility(&options));
+  if (options.async_memtable_write_threads < 2) return;
+  ASSERT_OK(DisableLazyAdvanceSequence(&options));
   Reopen(options);
   PoolEvent applying, release, later_applied, first_ack, later_ack;
   auto* sp = SyncPoint::GetInstance();
@@ -1630,10 +1733,9 @@ TEST_P(AsyncCommitExecutorTest,
   EXPECT_EQ("two", Get("later"));
 }
 
-TEST_P(AsyncCommitExecutorTest,
-       StrongVisibilityEmptyBatchesWaitForPriorSequence) {
+TEST_P(AsyncCommitExecutorTest, EagerSequenceEmptyBatchesWaitForPriorSequence) {
   Options options = PoolOptions();
-  ASSERT_OK(EnableStrongVisibility(&options));
+  ASSERT_OK(DisableLazyAdvanceSequence(&options));
   Reopen(options);
   WriteBatch initial_empty, initial_metadata;
   ASSERT_OK(db_->Write(Writes(), &initial_empty));
@@ -1682,9 +1784,9 @@ TEST_P(AsyncCommitExecutorTest,
   ExpectDrained();
 }
 
-TEST_P(AsyncCommitExecutorTest, StrongVisibilityReadsUsePublishedViews) {
+TEST_P(AsyncCommitExecutorTest, EagerSequenceReadsUsePublishedViews) {
   Options options = PoolOptions();
-  ASSERT_OK(EnableStrongVisibility(&options));
+  ASSERT_OK(DisableLazyAdvanceSequence(&options));
   Reopen(options);
   ASSERT_OK(db_->Put(Writes(), "existing", "old"));
   PoolEvent applying, release, acknowledged;
@@ -1732,9 +1834,9 @@ TEST_P(AsyncCommitExecutorTest, StrongVisibilityReadsUsePublishedViews) {
   db_->ReleaseSnapshot(snapshot);
 }
 
-TEST_P(AsyncCommitExecutorTest, StrongVisibilityApplyFailureReachesAllCallers) {
+TEST_P(AsyncCommitExecutorTest, EagerSequenceApplyFailureReachesAllCallers) {
   Options options = PoolOptions();
-  ASSERT_OK(EnableStrongVisibility(&options));
+  ASSERT_OK(DisableLazyAdvanceSequence(&options));
   options.avoid_flush_during_shutdown = true;
   Reopen(options);
   PoolEvent forming, form, follower_queued, applying, release;
@@ -1786,9 +1888,9 @@ TEST_P(AsyncCommitExecutorTest, StrongVisibilityApplyFailureReachesAllCallers) {
 }
 
 TEST_P(AsyncCommitExecutorTest,
-       StrongVisibilityWALFailureReturnsWithoutPublication) {
+       EagerSequenceWALFailureReturnsWithoutPublication) {
   Options options = PoolOptions();
-  ASSERT_OK(EnableStrongVisibility(&options));
+  ASSERT_OK(DisableLazyAdvanceSequence(&options));
   Reopen(options);
   auto* sp = SyncPoint::GetInstance();
   sp->SetCallBack("DBImpl::AsyncWriteImpl:WALStatus", [&](void* arg) {
@@ -1805,10 +1907,10 @@ TEST_P(AsyncCommitExecutorTest,
   EXPECT_TRUE(db_->Close().IsIOError());
 }
 
-TEST_P(AsyncCommitExecutorTest, StrongVisibilityLaterErrorWakesEarlierWaiter) {
+TEST_P(AsyncCommitExecutorTest, EagerSequenceLaterErrorWakesEarlierWaiter) {
   Options options = PoolOptions();
-  if (options.async_commit_memtable_threads < 2) return;
-  ASSERT_OK(EnableStrongVisibility(&options));
+  if (options.async_memtable_write_threads < 2) return;
+  ASSERT_OK(DisableLazyAdvanceSequence(&options));
   Reopen(options);
   PoolEvent applying, release, first_ack, later_ack;
   static thread_local SequenceNumber current_sequence = 0;
@@ -1945,7 +2047,7 @@ TEST_P(AsyncCommitExecutorTest, SubmissionDoesNotWaitForCompletionMutex) {
   EXPECT_TRUE(completing.Wait());
   release_wal.Set();
   const bool independent = acknowledged.Wait(std::chrono::seconds(1));
-  const bool apply_independent = options.async_commit_memtable_threads == 1 ||
+  const bool apply_independent = options.async_memtable_write_threads == 1 ||
                                  next_applied.Wait(std::chrono::seconds(1));
   release_completion.Set();
   second.join();
@@ -1957,7 +2059,7 @@ TEST_P(AsyncCommitExecutorTest, SubmissionDoesNotWaitForCompletionMutex) {
 
 TEST_P(AsyncCommitExecutorTest, PollingFindsWorkWithoutWake) {
   Options options = PoolOptions();
-  options.async_commit_memtable_threads = 1;
+  options.async_memtable_write_threads = 1;
   options.allow_concurrent_memtable_write = false;
   Reopen(options);
   PoolEvent polling, release_poll, enqueued, release_wake, applying;
@@ -1999,7 +2101,7 @@ TEST_P(AsyncCommitExecutorTest, PollingFindsWorkWithoutWake) {
 
 TEST_P(AsyncCommitExecutorTest, LastEnqueueCannotLoseWake) {
   Options options = PoolOptions();
-  options.async_commit_memtable_threads = 1;
+  options.async_memtable_write_threads = 1;
   options.allow_concurrent_memtable_write = false;
   Reopen(options);
   PoolEvent sleeping, release_sleep;
@@ -2079,20 +2181,20 @@ TEST_P(AsyncCommitExecutorTest, WALHandoffRespectsSyncNotificationOrder) {
 TEST_P(AsyncCommitExecutorTest, OptionsAndConcurrentFactoryValidation) {
   Options options = PoolOptions();
   Options invalid = options;
-  invalid.async_commit_memtable_threads = -1;
+  invalid.async_memtable_write_threads = -1;
   EXPECT_TRUE(TryReopen(invalid).IsInvalidArgument());
   invalid = options;
-  invalid.enable_async_commit = false;
+  invalid.async_memtable_write = false;
   EXPECT_TRUE(TryReopen(invalid).IsInvalidArgument());
   invalid = options;
-  invalid.max_async_commit_pending_groups = 0;
+  invalid.max_async_memtable_write_pending_groups = 0;
   EXPECT_TRUE(TryReopen(invalid).IsInvalidArgument());
   invalid = options;
-  invalid.async_commit_memtable_threads = 2;
+  invalid.async_memtable_write_threads = 2;
   invalid.allow_concurrent_memtable_write = false;
   EXPECT_TRUE(TryReopen(invalid).IsInvalidArgument());
   Reopen(options);
-  if (options.async_commit_memtable_threads > 1) {
+  if (options.async_memtable_write_threads > 1) {
     ColumnFamilyOptions cf_options;
     cf_options.memtable_factory.reset(new VectorRepFactory());
     ColumnFamilyHandle* cf = nullptr;
@@ -2194,8 +2296,8 @@ TEST_P(AsyncCommitExecutorTest, DeleteRangeSnapshotAndIterator) {
 
 TEST_P(AsyncCommitExecutorTest, GroupQuotaIncludesLogOnlyAndOversizedGroup) {
   Options options = PoolOptions();
-  options.max_async_commit_pending_groups = 1;
-  options.max_async_commit_pending_bytes = 1;
+  options.max_async_memtable_write_pending_groups = 1;
+  options.max_async_memtable_write_pending_bytes = 1;
   Reopen(options);
   PoolEvent applying, release;
   auto* sp = SyncPoint::GetInstance();
@@ -2399,7 +2501,7 @@ TEST_P(AsyncCommitExecutorTest, PartialInsertionFailureAccountsAndRecovers) {
 TEST_P(AsyncCommitExecutorTest,
        ErrorFreezesPublicationAndDrainWaitsForCleanup) {
   Options options = PoolOptions();
-  if (options.async_commit_memtable_threads < 2) return;
+  if (options.async_memtable_write_threads < 2) return;
   Reopen(options);
   PoolEvent first_started, release_first, later_done, failed, drain_blocked,
       drained;
@@ -2468,7 +2570,7 @@ TEST_P(AsyncCommitExecutorTest, MergeIsExclusiveBetweenOrdinaryGroups) {
 
 TEST_P(AsyncCommitExecutorTest, OneGroupKeepsRangesOnOneWorker) {
   Options options = PoolOptions();
-  if (options.async_commit_memtable_threads < 2) return;
+  if (options.async_memtable_write_threads < 2) return;
   Reopen(options);
   PoolEvent forming, form, follower_queued, first_range, release, second_range;
   PoolEvent follower_ack, leader_ack;
@@ -2605,7 +2707,7 @@ TEST_P(AsyncCommitExecutorTest, RandomHotKeysMatchWALSerialModel) {
 
 TEST_P(AsyncCommitExecutorTest, MergeFenceBlocksBothEarlierAndLaterGroups) {
   Options options = PoolOptions();
-  options.async_commit_memtable_groups_per_fetch = 64;
+  options.async_memtable_write_groups_per_fetch = 64;
   options.merge_operator = MergeOperators::CreateStringAppendOperator();
   Reopen(options);
   PoolEvent first, release_first, merged, release_merge, later, fence1, fence2;
@@ -2633,7 +2735,7 @@ TEST_P(AsyncCommitExecutorTest, MergeFenceBlocksBothEarlierAndLaterGroups) {
   EXPECT_TRUE(first.Wait());
   EXPECT_OK(db_->Merge(Writes(), "merged", "M"));
   EXPECT_OK(db_->Put(Writes(), "later", "three"));
-  if (options.async_commit_memtable_threads > 1) {
+  if (options.async_memtable_write_threads > 1) {
     EXPECT_TRUE(fence1.Wait());
   }
   EXPECT_FALSE(merged.IsSet());
@@ -2641,7 +2743,7 @@ TEST_P(AsyncCommitExecutorTest, MergeFenceBlocksBothEarlierAndLaterGroups) {
   release_first.Set();
   EXPECT_TRUE(merged.Wait());
   EXPECT_OK(db_->Put(Writes(), "last", "four"));
-  if (options.async_commit_memtable_threads > 1) {
+  if (options.async_memtable_write_threads > 1) {
     EXPECT_TRUE(fence2.Wait());
   }
   EXPECT_FALSE(later.IsSet());
@@ -2684,11 +2786,11 @@ TEST_P(AsyncCommitExecutorTest, ReleasedCFHandleDoesNotOwnWorkerLifetime) {
 int PoolCrashWriter(const std::string& path, int mode) {
   Options options;
   options.create_if_missing = true;
-  options.enable_async_commit = true;
+  options.async_memtable_write = true;
   options.enable_pipelined_write = (mode & 1) != 0;
-  options.async_commit_memtable_threads = 1 << (mode / 4);
+  options.async_memtable_write_threads = 1 << (mode / 4);
   options.allow_concurrent_memtable_write =
-      options.async_commit_memtable_threads > 1;
+      options.async_memtable_write_threads > 1;
   options.merge_operator = MergeOperators::CreateStringAppendOperator();
   DB* db = nullptr;
   if (!DB::Open(options, path, &db).ok()) return 11;
@@ -2735,8 +2837,8 @@ TEST_P(AsyncCommitExecutorTest, AllCallersAcknowledgedWALSurvivesProcessExit) {
   ASSERT_EQ(0, WEXITSTATUS(status));
   options.merge_operator = MergeOperators::CreateStringAppendOperator();
   for (int reopen = 0; reopen < 3; ++reopen) {
-    options.enable_async_commit = reopen != 0;
-    options.async_commit_memtable_threads = reopen == 2 ? 2 : 0;
+    options.async_memtable_write = reopen != 0;
+    options.async_memtable_write_threads = reopen == 2 ? 2 : 0;
     options.allow_concurrent_memtable_write = reopen == 2;
     DB* recovered = nullptr;
     std::vector<ColumnFamilyHandle*> handles;
@@ -2763,7 +2865,7 @@ TEST_P(AsyncCommitExecutorTest, AllCallersAcknowledgedWALSurvivesProcessExit) {
 
 TEST_P(AsyncCommitExecutorTest, RejectedGroupCleansTargetsBeforeWALHandoff) {
   Options options = PoolOptions();
-  options.max_async_commit_pending_groups = 1;
+  options.max_async_memtable_write_pending_groups = 1;
   Reopen(options);
   PoolEvent applying, release_apply, rejected_cleanup, release_cleanup,
       gate_wait;
@@ -2827,8 +2929,8 @@ TEST_P(AsyncCommitExecutorTest, OwnedProtectedMissingCFAndEmptyRangeRecovery) {
   ASSERT_OK(db_->Put(Writes(), "next", "four"));
   ASSERT_OK(dbfull()->WaitForAsyncCommit());
   ExpectDrained();
-  options.enable_async_commit = false;
-  options.async_commit_memtable_threads = 0;
+  options.async_memtable_write = false;
+  options.async_memtable_write_threads = 0;
   Reopen(options);
   EXPECT_EQ(4U, db_->GetLatestSequenceNumber());
   EXPECT_EQ("value", Get("kept"));
@@ -2909,7 +3011,7 @@ TEST_P(AsyncCommitExecutorTest, AtomicFlushWaitsForAcknowledgedCrossCFGroup) {
 }
 
 INSTANTIATE_TEST_CASE_P(PoolModes, AsyncCommitExecutorTest,
-                        testing::Range(0, 12));
+                        testing::Range(0, 16));
 }  // namespace ROCKSDB_NAMESPACE
 
 int main(int argc, char** argv) {

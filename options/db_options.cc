@@ -315,38 +315,40 @@ static std::unordered_map<std::string, OptionTypeInfo>
          {offsetof(struct ImmutableDBOptions, fail_if_options_file_error),
           OptionType::kBoolean, OptionVerificationType::kNormal,
           OptionTypeFlags::kNone}},
-        {"enable_async_commit",
-         {offsetof(struct ImmutableDBOptions, enable_async_commit),
+        {"async_memtable_write",
+         {offsetof(struct ImmutableDBOptions, async_memtable_write),
           OptionType::kBoolean, OptionVerificationType::kNormal,
           OptionTypeFlags::kNone}},
-        {"async_commit_strong_visibility",
-         {offsetof(struct ImmutableDBOptions, async_commit_strong_visibility),
+        {"lazy_advance_sequence",
+         {offsetof(struct ImmutableDBOptions, lazy_advance_sequence),
           OptionType::kBoolean, OptionVerificationType::kNormal,
           OptionTypeFlags::kNone}},
-        {"async_commit_memtable_threads",
-         {offsetof(struct ImmutableDBOptions, async_commit_memtable_threads),
+        {"async_memtable_write_threads",
+         {offsetof(struct ImmutableDBOptions, async_memtable_write_threads),
           OptionType::kInt, OptionVerificationType::kNormal,
           OptionTypeFlags::kNone}},
-        {"async_commit_wait_slots",
-         {offsetof(struct ImmutableDBOptions, async_commit_wait_slots),
+        {"async_memtable_write_wait_slots",
+         {offsetof(struct ImmutableDBOptions, async_memtable_write_wait_slots),
           OptionType::kUInt32T, OptionVerificationType::kNormal,
           OptionTypeFlags::kNone}},
-        {"async_commit_memtable_groups_per_fetch",
+        {"async_memtable_write_groups_per_fetch",
          {offsetof(struct ImmutableDBOptions,
-                   async_commit_memtable_groups_per_fetch),
+                   async_memtable_write_groups_per_fetch),
           OptionType::kUInt32T, OptionVerificationType::kNormal,
           OptionTypeFlags::kNone}},
-        {"async_commit_wait_spin_rounds",
-         {offsetof(struct ImmutableDBOptions, async_commit_wait_spin_rounds),
-          OptionType::kUInt32T, OptionVerificationType::kNormal,
-          OptionTypeFlags::kNone}},
-        {"async_commit_wait_spin_delay",
-         {offsetof(struct ImmutableDBOptions, async_commit_wait_spin_delay),
-          OptionType::kUInt32T, OptionVerificationType::kNormal,
-          OptionTypeFlags::kNone}},
-        {"async_commit_wait_spin_pause_multiplier",
+        {"async_memtable_write_wait_spin_rounds",
          {offsetof(struct ImmutableDBOptions,
-                   async_commit_wait_spin_pause_multiplier),
+                   async_memtable_write_wait_spin_rounds),
+          OptionType::kUInt32T, OptionVerificationType::kNormal,
+          OptionTypeFlags::kNone}},
+        {"async_memtable_write_wait_spin_delay",
+         {offsetof(struct ImmutableDBOptions,
+                   async_memtable_write_wait_spin_delay),
+          OptionType::kUInt32T, OptionVerificationType::kNormal,
+          OptionTypeFlags::kNone}},
+        {"async_memtable_write_wait_spin_pause_multiplier",
+         {offsetof(struct ImmutableDBOptions,
+                   async_memtable_write_wait_spin_pause_multiplier),
           OptionType::kUInt32T, OptionVerificationType::kNormal,
           OptionTypeFlags::kNone}},
         // Accept old OPTIONS files without interpreting microseconds as rounds.
@@ -356,12 +358,14 @@ static std::unordered_map<std::string, OptionTypeInfo>
         {"async_commit_wait_yield_us",
          {0, OptionType::kUInt64T, OptionVerificationType::kDeprecated,
           OptionTypeFlags::kNone}},
-        {"max_async_commit_pending_groups",
-         {offsetof(struct ImmutableDBOptions, max_async_commit_pending_groups),
+        {"max_async_memtable_write_pending_groups",
+         {offsetof(struct ImmutableDBOptions,
+                   max_async_memtable_write_pending_groups),
           OptionType::kSizeT, OptionVerificationType::kNormal,
           OptionTypeFlags::kNone}},
-        {"max_async_commit_pending_bytes",
-         {offsetof(struct ImmutableDBOptions, max_async_commit_pending_bytes),
+        {"max_async_memtable_write_pending_bytes",
+         {offsetof(struct ImmutableDBOptions,
+                   max_async_memtable_write_pending_bytes),
           OptionType::kSizeT, OptionVerificationType::kNormal,
           OptionTypeFlags::kNone}},
         {"enable_pipelined_write",
@@ -746,18 +750,22 @@ ImmutableDBOptions::ImmutableDBOptions(const DBOptions& options)
       listeners(options.listeners),
       enable_thread_tracking(options.enable_thread_tracking),
       enable_pipelined_write(options.enable_pipelined_write),
-      enable_async_commit(options.enable_async_commit),
-      async_commit_strong_visibility(options.async_commit_strong_visibility),
-      async_commit_wait_slots(options.async_commit_wait_slots),
-      async_commit_wait_spin_rounds(options.async_commit_wait_spin_rounds),
-      async_commit_wait_spin_delay(options.async_commit_wait_spin_delay),
-      async_commit_wait_spin_pause_multiplier(
-          options.async_commit_wait_spin_pause_multiplier),
-      max_async_commit_pending_bytes(options.max_async_commit_pending_bytes),
-      async_commit_memtable_threads(options.async_commit_memtable_threads),
-      async_commit_memtable_groups_per_fetch(
-          options.async_commit_memtable_groups_per_fetch),
-      max_async_commit_pending_groups(options.max_async_commit_pending_groups),
+      async_memtable_write(options.async_memtable_write),
+      lazy_advance_sequence(options.lazy_advance_sequence),
+      async_memtable_write_wait_slots(options.async_memtable_write_wait_slots),
+      async_memtable_write_wait_spin_rounds(
+          options.async_memtable_write_wait_spin_rounds),
+      async_memtable_write_wait_spin_delay(
+          options.async_memtable_write_wait_spin_delay),
+      async_memtable_write_wait_spin_pause_multiplier(
+          options.async_memtable_write_wait_spin_pause_multiplier),
+      max_async_memtable_write_pending_bytes(
+          options.max_async_memtable_write_pending_bytes),
+      async_memtable_write_threads(options.async_memtable_write_threads),
+      async_memtable_write_groups_per_fetch(
+          options.async_memtable_write_groups_per_fetch),
+      max_async_memtable_write_pending_groups(
+          options.max_async_memtable_write_pending_groups),
       unordered_write(options.unordered_write),
       allow_concurrent_memtable_write(options.allow_concurrent_memtable_write),
       enable_write_thread_adaptive_yield(
@@ -908,29 +916,35 @@ void ImmutableDBOptions::Dump(Logger* log) const {
                    static_cast<int>(wal_recovery_mode));
   ROCKS_LOG_HEADER(log, "                 Options.enable_thread_tracking: %d",
                    enable_thread_tracking);
-  ROCKS_LOG_HEADER(log, "          Options.async_commit_memtable_threads: %d",
-                   async_commit_memtable_threads);
-  ROCKS_LOG_HEADER(log, "       Options.max_async_commit_pending_groups: %" ROCKSDB_PRIszt,
-                   max_async_commit_pending_groups);
-  ROCKS_LOG_HEADER(log, "                    Options.enable_async_commit: %d",
-                   enable_async_commit);
+  ROCKS_LOG_HEADER(log, "          Options.async_memtable_write_threads: %d",
+                   async_memtable_write_threads);
   ROCKS_LOG_HEADER(log,
-                   "       Options.async_commit_memtable_groups_per_fetch: %u",
-                   async_commit_memtable_groups_per_fetch);
-  ROCKS_LOG_HEADER(log, "          Options.async_commit_strong_visibility: %d",
-                   async_commit_strong_visibility);
-  ROCKS_LOG_HEADER(log, "                 Options.async_commit_wait_slots: %u",
-                   async_commit_wait_slots);
-  ROCKS_LOG_HEADER(log, "             Options.async_commit_wait_spin_rounds: %u",
-                   async_commit_wait_spin_rounds);
-  ROCKS_LOG_HEADER(log, "              Options.async_commit_wait_spin_delay: %u",
-                   async_commit_wait_spin_delay);
+                   "       Options.max_async_memtable_write_pending_groups: "
+                   "%" ROCKSDB_PRIszt,
+                   max_async_memtable_write_pending_groups);
+  ROCKS_LOG_HEADER(log, "                    Options.async_memtable_write: %d",
+                   async_memtable_write);
   ROCKS_LOG_HEADER(log,
-                   "   Options.async_commit_wait_spin_pause_multiplier: %u",
-                   async_commit_wait_spin_pause_multiplier);
+                   "       Options.async_memtable_write_groups_per_fetch: %u",
+                   async_memtable_write_groups_per_fetch);
+  ROCKS_LOG_HEADER(log, "          Options.lazy_advance_sequence: %d",
+                   lazy_advance_sequence);
   ROCKS_LOG_HEADER(
-      log, "         Options.max_async_commit_pending_bytes: %" ROCKSDB_PRIszt,
-      max_async_commit_pending_bytes);
+      log, "                 Options.async_memtable_write_wait_slots: %u",
+      async_memtable_write_wait_slots);
+  ROCKS_LOG_HEADER(
+      log, "             Options.async_memtable_write_wait_spin_rounds: %u",
+      async_memtable_write_wait_spin_rounds);
+  ROCKS_LOG_HEADER(
+      log, "              Options.async_memtable_write_wait_spin_delay: %u",
+      async_memtable_write_wait_spin_delay);
+  ROCKS_LOG_HEADER(
+      log, "   Options.async_memtable_write_wait_spin_pause_multiplier: %u",
+      async_memtable_write_wait_spin_pause_multiplier);
+  ROCKS_LOG_HEADER(log,
+                   "         Options.max_async_memtable_write_pending_bytes: "
+                   "%" ROCKSDB_PRIszt,
+                   max_async_memtable_write_pending_bytes);
   ROCKS_LOG_HEADER(log, "                 Options.enable_pipelined_write: %d",
                    enable_pipelined_write);
   ROCKS_LOG_HEADER(log, "                 Options.unordered_write: %d",

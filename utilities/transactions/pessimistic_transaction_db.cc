@@ -206,11 +206,11 @@ Status TransactionDB::Open(
     const std::string& dbname,
     const std::vector<ColumnFamilyDescriptor>& column_families,
     std::vector<ColumnFamilyHandle*>* handles, TransactionDB** dbptr) {
-  if (db_options.enable_async_commit) {
+  if (db_options.async_memtable_write) {
     *dbptr = nullptr;
     handles->clear();
     return Status::NotSupported(
-        "transactions do not support enable_async_commit");
+        "transactions do not support async_memtable_write");
   }
 
   Status s;

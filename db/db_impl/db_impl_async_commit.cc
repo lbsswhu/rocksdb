@@ -77,7 +77,7 @@ class AsyncBatchValidator : public WriteBatch::Handler {
 }  // namespace
 
 Status DBImpl::AsyncCommitStatus(bool check_closing) {
-  if (!immutable_db_options_.enable_async_commit) return Status::OK();
+  if (!immutable_db_options_.async_memtable_write) return Status::OK();
   std::lock_guard<std::mutex> lock(async_commit_mutex_);
   if (!async_commit_error_.ok()) return async_commit_error_;
   if (check_closing && async_commit_closing_)
@@ -86,7 +86,7 @@ Status DBImpl::AsyncCommitStatus(bool check_closing) {
 }
 
 void DBImpl::FailAsyncCommit(const Status& status) {
-  if (!immutable_db_options_.enable_async_commit || status.ok()) return;
+  if (!immutable_db_options_.async_memtable_write || status.ok()) return;
   {
     std::lock_guard<std::mutex> lock(async_commit_mutex_);
     if (async_commit_error_.ok()) async_commit_error_ = status;
@@ -116,15 +116,19 @@ Status DBImpl::PublishAsyncCommitSequence(SequenceNumber sequence) {
 }
 
 Status DBImpl::PrepareAsyncCommitRead(const ReadOptions& options) {
-  if (!immutable_db_options_.enable_async_commit ||
-      immutable_db_options_.async_commit_strong_visibility)
+  if (!immutable_db_options_.async_memtable_write ||
+      !immutable_db_options_.lazy_advance_sequence)
     return Status::OK();
-  // Capture once, before selecting a read view or doing any lookup. Never
-  // chase writes allocated after this boundary. The max includes recovery and
-  // sequence-consuming management operations preceding the first async write.
+  // An explicit snapshot only needs its own sequence to be published. Reads
+  // selecting a new view capture A once and never chase later allocations.
+  // The max covers recovery and sequence-consuming management operations
+  // preceding the first async write.
   SequenceNumber target =
-      std::max(async_commit_allocated_sequence_.load(std::memory_order_acquire),
-               versions_->LastSequence());
+      options.snapshot != nullptr
+          ? options.snapshot->GetSequenceNumber()
+          : std::max(async_commit_allocated_sequence_.load(
+                         std::memory_order_acquire),
+                     versions_->LastSequence());
   if (versions_->LastSequence() >= target) return Status::OK();
   TEST_SYNC_POINT_CALLBACK("DBImpl::PrepareAsyncCommitRead:Wait", &target);
   return WaitForAsyncCommitSequence(target, options);
@@ -134,7 +138,7 @@ Status DBImpl::WaitForAsyncCommitSequence(SequenceNumber target,
                                           const ReadOptions& options) {
   if (versions_->LastSequence() >= target) return Status::OK();
   const uint32_t spin_rounds =
-      immutable_db_options_.async_commit_wait_spin_rounds;
+      immutable_db_options_.async_memtable_write_wait_spin_rounds;
   const bool has_deadline = options.deadline.count() != 0;
   auto check_deadline = [&]() {
     return has_deadline &&
@@ -146,9 +150,10 @@ Status DBImpl::WaitForAsyncCommitSequence(SequenceNumber target,
     return AsyncCommitStatus();
   if (check_deadline())
     return Status::TimedOut("waiting for async commit publication");
-  const uint32_t spin_delay = immutable_db_options_.async_commit_wait_spin_delay;
+  const uint32_t spin_delay =
+      immutable_db_options_.async_memtable_write_wait_spin_delay;
   const uint32_t pause_multiplier =
-      immutable_db_options_.async_commit_wait_spin_pause_multiplier;
+      immutable_db_options_.async_memtable_write_wait_spin_pause_multiplier;
   Random* random = spin_rounds != 0 && spin_delay != 0 && pause_multiplier != 0
                        ? Random::GetTLSInstance()
                        : nullptr;
@@ -193,10 +198,11 @@ Status DBImpl::WaitForAsyncCommitSequence(SequenceNumber target,
     return AsyncCommitStatus();
   if (check_deadline())
     return Status::TimedOut("waiting for async commit publication");
-  uint32_t index = target % immutable_db_options_.async_commit_wait_slots;
+  uint32_t index =
+      target % immutable_db_options_.async_memtable_write_wait_slots;
   TEST_SYNC_POINT_CALLBACK("DBImpl::WaitForAsyncCommitSequence:BeforeSlotLock",
                            &index);
-  auto& slot = async_commit_wait_slots_[index];
+  auto& slot = async_memtable_write_wait_slots_[index];
   std::unique_lock<std::mutex> lock(slot.mutex);
   // The notifier locks every slot crossed by P, even an empty one. Together
   // with this locked predicate recheck this closes the check-to-sleep race.
@@ -250,22 +256,23 @@ void DBImpl::SignalAsyncCommitPublication(SequenceNumber previous,
 void DBImpl::NotifyAsyncCommitPublication(SequenceNumber previous,
                                           SequenceNumber published) {
   assert(published >= previous);
-  const uint32_t slots = immutable_db_options_.async_commit_wait_slots;
+  const uint32_t slots = immutable_db_options_.async_memtable_write_wait_slots;
   const uint32_t count = static_cast<uint32_t>(
       std::min<SequenceNumber>(published - previous, slots));
   uint32_t index = (previous + 1) % slots;
   for (uint32_t i = 0; i < count; ++i, index = (index + 1) % slots) {
     TEST_SYNC_POINT_CALLBACK(
         "DBImpl::NotifyAsyncCommitPublication:BeforeSlotLock", &index);
-    auto& slot = async_commit_wait_slots_[index];
+    auto& slot = async_memtable_write_wait_slots_[index];
     std::lock_guard<std::mutex> lock(slot.mutex);
     if (slot.waiters != 0) slot.cv.notify_all();
   }
 }
 
 void DBImpl::NotifyAllAsyncCommitWaiters() {
-  for (uint32_t i = 0; i < immutable_db_options_.async_commit_wait_slots; ++i) {
-    auto& slot = async_commit_wait_slots_[i];
+  for (uint32_t i = 0;
+       i < immutable_db_options_.async_memtable_write_wait_slots; ++i) {
+    auto& slot = async_memtable_write_wait_slots_[i];
     std::lock_guard<std::mutex> lock(slot.mutex);
     if (slot.waiters != 0) slot.cv.notify_all();
   }
@@ -275,19 +282,21 @@ Status DBImpl::ReserveAsyncCommitBytes(size_t bytes, size_t already_reserved,
                                        bool no_slowdown) {
   std::unique_lock<std::mutex> lock(async_commit_mutex_);
   assert(async_commit_pending_bytes_ >= already_reserved);
-  const size_t limit = immutable_db_options_.max_async_commit_pending_bytes;
+  const size_t limit =
+      immutable_db_options_.max_async_memtable_write_pending_bytes;
   for (;;) {
     if (!async_commit_error_.ok()) return async_commit_error_;
     if (async_commit_closing_) return Status::ShutdownInProgress();
     const size_t other = async_commit_pending_bytes_ - already_reserved;
     // An oversized group may exclusively hold the budget, preserving large
     // writes without allowing an unbounded queue of owned payloads.
-    const bool pool = immutable_db_options_.async_commit_memtable_threads > 0;
+    const bool pool = immutable_db_options_.async_memtable_write_threads > 0;
     const size_t other_groups =
         async_commit_pending_groups_ - (already_reserved != 0);
     const bool group_available =
         !pool ||
-        other_groups < immutable_db_options_.max_async_commit_pending_groups;
+        other_groups <
+            immutable_db_options_.max_async_memtable_write_pending_groups;
     const bool alone = pool ? other_groups == 0 : other == 0;
     if (group_available &&
         (alone || (bytes <= limit && other <= limit - bytes))) {
@@ -399,7 +408,7 @@ Status DBImpl::BuildAsyncCommitGroup(WriteThread::WriteGroup& writers,
       group->record_count += count;
       group->exclusive = group->exclusive || batch->HasMerge();
     }
-    if (immutable_db_options_.async_commit_memtable_threads > 0) {
+    if (immutable_db_options_.async_memtable_write_threads > 0) {
       group->targets.reserve(group->cf_refs.size());
       for (auto* cfd : group->cf_refs) {
         cfd->mem()->Ref();
@@ -411,7 +420,7 @@ Status DBImpl::BuildAsyncCommitGroup(WriteThread::WriteGroup& writers,
   // descriptor/reference arrays. Only the no-pool single-request path borrows
   // caller storage.
   const size_t task_storage =
-      immutable_db_options_.async_commit_memtable_threads > 0
+      immutable_db_options_.async_memtable_write_threads > 0
           ? AsyncCommitExecutor::TaskStorageBytes()
           : 0;
   const size_t metadata =
@@ -430,7 +439,7 @@ Status DBImpl::BuildAsyncCommitGroup(WriteThread::WriteGroup& writers,
     return Status::InvalidArgument("async commit group capacity overflow");
   }
   size_t bytes = metadata;
-  const bool owned = immutable_db_options_.async_commit_memtable_threads > 0;
+  const bool owned = immutable_db_options_.async_memtable_write_threads > 0;
   if (writers.size > 1 || owned) {
     bytes += (group->inline_batch ? 0 : sizeof(WriteBatch)) +
              2 * (merged_bytes + protection);
@@ -498,8 +507,8 @@ Status DBImpl::ApplyAsyncCommitGroup(const AsyncCommitGroup& group) {
 
 Status DBImpl::AsyncWriteImpl(const WriteOptions& options, WriteBatch* batch,
                               uint64_t* log_used, uint64_t* seq_used) {
-  const bool strong_visibility =
-      immutable_db_options_.async_commit_strong_visibility;
+  const bool lazy_advance_sequence =
+      immutable_db_options_.lazy_advance_sequence;
   Status status = AsyncCommitStatus();
   if (!status.ok()) return status;
   PERF_TIMER_GUARD(write_pre_and_post_process_time);
@@ -509,7 +518,7 @@ Status DBImpl::AsyncWriteImpl(const WriteOptions& options, WriteBatch* batch,
   auto finish = [&]() {
     Status result = writer.FinalStatus();
     if (result.ok()) {
-      if (strong_visibility) {
+      if (!lazy_advance_sequence) {
         // Every caller has left the WAL queue before entering this wait. The
         // worker pool publishes the ordered prefix independently of callers.
         result = WaitForAsyncCommitSequence(writer.async_end_sequence,
@@ -530,7 +539,7 @@ Status DBImpl::AsyncWriteImpl(const WriteOptions& options, WriteBatch* batch,
   AsyncCommitGroup local_group;  // Preserve V1's stack-owned fast path.
   std::shared_ptr<AsyncCommitGroup> owned_group;
   if (async_commit_executor_) {
-    if (immutable_db_options_.async_commit_memtable_threads == 1)
+    if (immutable_db_options_.async_memtable_write_threads == 1)
       owned_group = std::make_shared<AsyncCommitSerialGroup>();
     else
       owned_group = std::make_shared<AsyncCommitGroup>();
@@ -759,10 +768,10 @@ void DBImpl::ScheduleAsyncCommitTargets(const AsyncCommitGroup& group) {
 }
 
 void DBImpl::StartAsyncCommitExecutor() {
-  if (!immutable_db_options_.enable_async_commit) return;
+  if (!immutable_db_options_.async_memtable_write) return;
   async_commit_sequence_notifier_.reset(new AsyncCommitSequenceNotifier(this));
   async_commit_sequence_notifier_->Start(versions_->LastSequence());
-  if (immutable_db_options_.async_commit_memtable_threads == 0) return;
+  if (immutable_db_options_.async_memtable_write_threads == 0) return;
   async_commit_executor_.reset(new AsyncCommitExecutor(this));
   async_commit_executor_->Start();
   write_thread_.SetAsyncCommitDrain([this] {
@@ -796,7 +805,7 @@ void DBImpl::DrainAsyncCommitsWithDBMutex() {
 }
 
 Status DBImpl::WaitForAsyncCommit() {
-  if (!immutable_db_options_.enable_async_commit) return Status::OK();
+  if (!immutable_db_options_.async_memtable_write) return Status::OK();
   InstrumentedMutexLock lock(&mutex_);
   WriteThread::Writer barrier;
   write_thread_.EnterUnbatched(&barrier, &mutex_);

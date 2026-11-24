@@ -21,7 +21,8 @@ namespace {
 constexpr uint64_t kAsyncCommitIdleMicros = 50;
 }
 AsyncCommitExecutor::AsyncCommitExecutor(DBImpl* db)
-    : db_(db), workers_(db->immutable_db_options_.async_commit_memtable_threads),
+    : db_(db),
+      workers_(db->immutable_db_options_.async_memtable_write_threads),
       queue_(workers_) {}
 AsyncCommitExecutor::~AsyncCommitExecutor() {
   if (!joined_) BeginShutdownAndDrain().PermitUncheckedError();
@@ -213,7 +214,7 @@ void AsyncCommitExecutor::Run(size_t worker) {
     return;
   }
   const size_t fetch_limit =
-      db_->immutable_db_options_.async_commit_memtable_groups_per_fetch;
+      db_->immutable_db_options_.async_memtable_write_groups_per_fetch;
   AsyncCommitTask pending;
   for (;;) {
     std::array<AsyncCommitTask, 64> refs;

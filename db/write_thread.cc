@@ -22,8 +22,8 @@ WriteThread::WriteThread(const ImmutableDBOptions& db_options)
       allow_concurrent_memtable_write_(
           db_options.allow_concurrent_memtable_write),
       enable_pipelined_write_(db_options.enable_pipelined_write),
-      use_async_wal_event_(db_options.enable_async_commit &&
-                           db_options.async_commit_memtable_threads > 0),
+      use_async_wal_event_(db_options.async_memtable_write &&
+                           db_options.async_memtable_write_threads > 0),
       max_write_batch_group_size_bytes(
           db_options.max_write_batch_group_size_bytes),
       newest_writer_(nullptr),

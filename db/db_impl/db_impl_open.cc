@@ -233,41 +233,41 @@ Status DBImpl::ValidateOptions(
 }
 
 Status DBImpl::ValidateOptions(const DBOptions& db_options) {
-  if (db_options.async_commit_wait_slots < 1 ||
-      db_options.async_commit_wait_slots > 1024 ||
-      db_options.async_commit_wait_spin_delay > 1000 ||
-      db_options.async_commit_wait_spin_pause_multiplier > 100) {
+  if (db_options.async_memtable_write_wait_slots < 1 ||
+      db_options.async_memtable_write_wait_slots > 1024 ||
+      db_options.async_memtable_write_wait_spin_delay > 1000 ||
+      db_options.async_memtable_write_wait_spin_pause_multiplier > 100) {
     return Status::InvalidArgument(
         "invalid async commit publication wait options");
   }
-  if (db_options.async_commit_strong_visibility &&
-      (!db_options.enable_async_commit ||
-       db_options.async_commit_memtable_threads <= 0)) {
+  if (!db_options.lazy_advance_sequence &&
+      (!db_options.async_memtable_write ||
+       db_options.async_memtable_write_threads <= 0)) {
     return Status::InvalidArgument(
-        "async_commit_strong_visibility requires enable_async_commit and "
-        "async_commit_memtable_threads > 0");
+        "lazy_advance_sequence=false requires async_memtable_write and "
+        "async_memtable_write_threads > 0");
   }
-  if (db_options.async_commit_memtable_threads < 0 ||
-      db_options.async_commit_memtable_groups_per_fetch < 1 ||
-      db_options.async_commit_memtable_groups_per_fetch > 64 ||
-      (!db_options.enable_async_commit &&
-       db_options.async_commit_memtable_threads != 0) ||
-      (db_options.async_commit_memtable_threads > 1 &&
+  if (db_options.async_memtable_write_threads < 0 ||
+      db_options.async_memtable_write_groups_per_fetch < 1 ||
+      db_options.async_memtable_write_groups_per_fetch > 64 ||
+      (!db_options.async_memtable_write &&
+       db_options.async_memtable_write_threads != 0) ||
+      (db_options.async_memtable_write_threads > 1 &&
        !db_options.allow_concurrent_memtable_write) ||
-      (db_options.async_commit_memtable_threads > 0 &&
-       db_options.max_async_commit_pending_groups == 0)) {
+      (db_options.async_memtable_write_threads > 0 &&
+       db_options.max_async_memtable_write_pending_groups == 0)) {
     return Status::InvalidArgument("invalid async commit memtable pool options");
   }
-  if (db_options.enable_async_commit) {
+  if (db_options.async_memtable_write) {
     if (db_options.unordered_write || db_options.two_write_queues ||
         db_options.manual_wal_flush || db_options.allow_2pc) {
       return Status::NotSupported(
-          "enable_async_commit requires ordered ordinary writes and automatic "
+          "async_memtable_write requires ordered ordinary writes and automatic "
           "WAL flushing");
     }
-    if (db_options.max_async_commit_pending_bytes == 0) {
+    if (db_options.max_async_memtable_write_pending_bytes == 0) {
       return Status::InvalidArgument(
-          "max_async_commit_pending_bytes must be nonzero");
+          "max_async_memtable_write_pending_bytes must be nonzero");
     }
   }
   if (db_options.db_paths.size() > 4) {
@@ -1615,10 +1615,10 @@ Status DBImpl::Open(const DBOptions& db_options, const std::string& dbname,
                     const std::vector<ColumnFamilyDescriptor>& column_families,
                     std::vector<ColumnFamilyHandle*>* handles, DB** dbptr,
                     const bool seq_per_batch, const bool batch_per_txn) {
-  if (db_options.enable_async_commit && (seq_per_batch || !batch_per_txn)) {
+  if (db_options.async_memtable_write && (seq_per_batch || !batch_per_txn)) {
     *dbptr = nullptr;
     return Status::NotSupported(
-        "enable_async_commit does not support transaction sequences");
+        "async_memtable_write does not support transaction sequences");
   }
   Status s = ValidateOptionsByTable(db_options, column_families);
   if (!s.ok()) {

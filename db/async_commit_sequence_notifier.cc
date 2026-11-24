@@ -13,7 +13,7 @@
 namespace ROCKSDB_NAMESPACE {
 AsyncCommitSequenceNotifier::AsyncCommitSequenceNotifier(DBImpl* db)
     : db_(db),
-      multi_worker_(db->immutable_db_options_.async_commit_memtable_threads >
+      multi_worker_(db->immutable_db_options_.async_memtable_write_threads >
                     1) {}
 
 AsyncCommitSequenceNotifier::~AsyncCommitSequenceNotifier() { Stop(); }

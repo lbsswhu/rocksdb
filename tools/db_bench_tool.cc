@@ -1184,28 +1184,29 @@ DEFINE_uint64(delayed_write_rate, 8388608u,
               "Limited bytes allowed to DB when soft_rate_limit or "
               "level0_slowdown_writes_trigger triggers");
 
-DEFINE_bool(enable_async_commit, false,
-            "Acknowledge async writes after WAL; a worker pool also releases "
-            "the leader");
-DEFINE_bool(
-    async_commit_strong_visibility, false,
-    "Wait for async memtable publication before successful write return");
-DEFINE_int32(async_commit_memtable_threads, 0,
-             "Dedicated async commit memtable workers (zero uses original leader)");
-DEFINE_uint32(async_commit_memtable_groups_per_fetch, 1,
+DEFINE_bool(async_memtable_write, true,
+            "Apply memtable writes asynchronously after WAL; acknowledgment "
+            "timing is controlled by lazy_advance_sequence");
+DEFINE_bool(lazy_advance_sequence, true,
+            "Acknowledge after WAL without waiting for memtable publication; "
+            "false waits for publication before successful write return");
+DEFINE_int32(async_memtable_write_threads, 0,
+             "Dedicated async memtable workers (zero uses original leader)");
+DEFINE_uint32(async_memtable_write_groups_per_fetch, 1,
               "Maximum ready WAL groups fetched per worker in multi-worker "
               "mode, in [1,64]");
-DEFINE_uint32(async_commit_wait_slots, 32,
+DEFINE_uint32(async_memtable_write_wait_slots, 32,
               "Async publication wait shards, in [1, 1024]");
-DEFINE_uint32(async_commit_wait_spin_rounds, 30,
+DEFINE_uint32(async_memtable_write_wait_spin_rounds, 30,
               "Outer spin polls before blocking on async publication");
-DEFINE_uint32(async_commit_wait_spin_delay, 6,
-              "Exclusive upper bound of randomized publication spin delay (0-1000)");
-DEFINE_uint32(async_commit_wait_spin_pause_multiplier, 50,
+DEFINE_uint32(
+    async_memtable_write_wait_spin_delay, 6,
+    "Exclusive upper bound of randomized publication spin delay (0-1000)");
+DEFINE_uint32(async_memtable_write_wait_spin_pause_multiplier, 50,
               "CPU pauses per publication spin delay unit (0-100)");
-DEFINE_uint64(max_async_commit_pending_groups, 4096,
+DEFINE_uint64(max_async_memtable_write_pending_groups, 4096,
               "Maximum pending async commit groups with a worker pool");
-DEFINE_uint64(max_async_commit_pending_bytes, 67108864,
+DEFINE_uint64(max_async_memtable_write_pending_bytes, 67108864,
               "Maximum retained async commit group bytes (nonzero)");
 
 DEFINE_bool(enable_pipelined_write, true,
@@ -2226,10 +2227,11 @@ class Stats {
   // Lightweight acknowledgment summary has no file-counter reset/flush side
   // effects. Render it only after the completion timestamp has been captured.
   void ReportAsyncAcknowledgments(const Slice& name,
-                                  bool strong_visibility) const {
+                                  bool lazy_advance_sequence) const {
     const double elapsed = std::max(1e-6, (finish_ - start_) * 1e-6);
     fprintf(stdout, "%s-%s-ack : %11.3f micros/op %0.0f ops/sec;\n",
-            name.ToString().c_str(), strong_visibility ? "published" : "wal",
+            name.ToString().c_str(),
+            lazy_advance_sequence ? "wal" : "published",
             done_ ? seconds_ * 1e6 / done_ : 0, done_ / elapsed);
   }
 
@@ -3812,19 +3814,20 @@ class Benchmark {
 
     // API completion no longer implies pool completion. Capture both times
     // before rendering reports, and reset file-operation counters only once.
-    bool pool_mode = db_.db &&
-                     db_.db->GetDBOptions().async_commit_memtable_threads > 0;
-    bool strong_visibility =
-        db_.db && db_.db->GetDBOptions().async_commit_strong_visibility;
+    bool pool_mode =
+        db_.db && db_.db->GetDBOptions().async_memtable_write_threads > 0;
+    bool lazy_advance_sequence =
+        !db_.db || db_.db->GetDBOptions().lazy_advance_sequence;
     for (auto& db : multi_dbs_) {
-      pool_mode |= db.db && db.db->GetDBOptions().async_commit_memtable_threads > 0;
-      strong_visibility |=
-          db.db && db.db->GetDBOptions().async_commit_strong_visibility;
+      pool_mode |=
+          db.db && db.db->GetDBOptions().async_memtable_write_threads > 0;
+      lazy_advance_sequence &=
+          !db.db || db.db->GetDBOptions().lazy_advance_sequence;
     }
     uint64_t drain_start = FLAGS_env->NowMicros();
     TEST_SYNC_POINT("DBBench::RunBenchmark:BeforeAsyncDrain");
     auto drain_async = [](DB* db) {
-      if (db == nullptr || !db->GetDBOptions().enable_async_commit) return;
+      if (db == nullptr || !db->GetDBOptions().async_memtable_write) return;
       Status status = static_cast<DBImpl*>(db->GetRootDB())->WaitForAsyncCommit();
       if (!status.ok()) {
         fprintf(stderr, "Async commit drain failed: %s\n", status.ToString().c_str());
@@ -3835,7 +3838,7 @@ class Benchmark {
     for (auto& db : multi_dbs_) drain_async(db.db);
     const uint64_t drain_end = FLAGS_env->NowMicros();
     auto check_async_completion = [](DB* db) {
-      if (db == nullptr || !db->GetDBOptions().enable_async_commit) return;
+      if (db == nullptr || !db->GetDBOptions().async_memtable_write) return;
       uint64_t groups = 0, bytes = 0, error = 0;
       bool known =
           db->GetIntProperty("rocksdb.async-commit-pending-groups", &groups) &&
@@ -3849,7 +3852,7 @@ class Benchmark {
         fprintf(stderr, "Async commit did not complete successfully\n");
         exit(1);
       }
-      if (db->GetDBOptions().async_commit_memtable_threads > 0) {
+      if (db->GetDBOptions().async_memtable_write_threads > 0) {
         for (const char* metric : {"submitted-groups", "drained-groups",
                                   "lease-batches", "lease-ranges", "lease-bytes",
                                   "single-copy-bytes", "queue-micros", "apply-micros",
@@ -3869,13 +3872,13 @@ class Benchmark {
     merge_stats.ResetTimingForMerge();
     for (int i = 0; i < n; i++) merge_stats.Merge(arg[i].thread->stats);
     if (pool_mode) {
-      merge_stats.ReportAsyncAcknowledgments(name, strong_visibility);
+      merge_stats.ReportAsyncAcknowledgments(name, lazy_advance_sequence);
       merge_stats.ExtendForAsyncDrain(drain_end);
       fprintf(stdout,
               "Async commit drain: %" PRIu64
               " us (main throughput includes drain; latency is %s ack)\n",
               drain_end - drain_start,
-              strong_visibility ? "sequence publication" : "WAL");
+              lazy_advance_sequence ? "WAL" : "sequence publication");
     }
     merge_stats.Report(name);
 
@@ -4371,20 +4374,23 @@ class Benchmark {
     options.enable_write_thread_adaptive_yield =
         FLAGS_enable_write_thread_adaptive_yield;
     options.enable_pipelined_write = FLAGS_enable_pipelined_write;
-    options.enable_async_commit = FLAGS_enable_async_commit;
-    options.async_commit_strong_visibility =
-        FLAGS_async_commit_strong_visibility;
-    options.async_commit_memtable_threads = FLAGS_async_commit_memtable_threads;
-    options.async_commit_memtable_groups_per_fetch =
-        FLAGS_async_commit_memtable_groups_per_fetch;
-    options.async_commit_wait_slots = FLAGS_async_commit_wait_slots;
-    options.async_commit_wait_spin_rounds = FLAGS_async_commit_wait_spin_rounds;
-    options.async_commit_wait_spin_delay = FLAGS_async_commit_wait_spin_delay;
-    options.async_commit_wait_spin_pause_multiplier =
-        FLAGS_async_commit_wait_spin_pause_multiplier;
-    options.max_async_commit_pending_groups = FLAGS_max_async_commit_pending_groups;
-    options.max_async_commit_pending_bytes =
-        FLAGS_max_async_commit_pending_bytes;
+    options.async_memtable_write = FLAGS_async_memtable_write;
+    options.lazy_advance_sequence = FLAGS_lazy_advance_sequence;
+    options.async_memtable_write_threads = FLAGS_async_memtable_write_threads;
+    options.async_memtable_write_groups_per_fetch =
+        FLAGS_async_memtable_write_groups_per_fetch;
+    options.async_memtable_write_wait_slots =
+        FLAGS_async_memtable_write_wait_slots;
+    options.async_memtable_write_wait_spin_rounds =
+        FLAGS_async_memtable_write_wait_spin_rounds;
+    options.async_memtable_write_wait_spin_delay =
+        FLAGS_async_memtable_write_wait_spin_delay;
+    options.async_memtable_write_wait_spin_pause_multiplier =
+        FLAGS_async_memtable_write_wait_spin_pause_multiplier;
+    options.max_async_memtable_write_pending_groups =
+        FLAGS_max_async_memtable_write_pending_groups;
+    options.max_async_memtable_write_pending_bytes =
+        FLAGS_max_async_memtable_write_pending_bytes;
     options.unordered_write = FLAGS_unordered_write;
     options.write_thread_max_yield_usec = FLAGS_write_thread_max_yield_usec;
     options.write_thread_slow_yield_usec = FLAGS_write_thread_slow_yield_usec;

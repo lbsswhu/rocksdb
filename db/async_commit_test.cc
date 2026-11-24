@@ -34,8 +34,10 @@ TEST_F(AsyncCommitTest, RandomPublicationSpinOptionsRoundTripAndValidation) {
   DBOptions parsed;
   ASSERT_OK(GetDBOptionsFromString(
       DBOptions(),
-      "async_commit_wait_spin_rounds=30;async_commit_wait_spin_delay=6;"
-      "async_commit_wait_spin_pause_multiplier=50;", &parsed));
+      "async_memtable_write_wait_spin_rounds=30;async_memtable_write_wait_spin_"
+      "delay=6;"
+      "async_memtable_write_wait_spin_pause_multiplier=50;",
+      &parsed));
   Options options(parsed, ColumnFamilyOptions());
   options.create_if_missing = true;
   Reopen(options);
@@ -45,17 +47,23 @@ TEST_F(AsyncCommitTest, RandomPublicationSpinOptionsRoundTripAndValidation) {
   for (const auto& candidate : {loaded, db_->GetDBOptions()}) {
     std::string text;
     ASSERT_OK(GetStringFromDBOptions(&text, candidate));
-    EXPECT_NE(std::string::npos, text.find("async_commit_wait_spin_rounds=30"));
-    EXPECT_NE(std::string::npos, text.find("async_commit_wait_spin_delay=6"));
     EXPECT_NE(std::string::npos,
-              text.find("async_commit_wait_spin_pause_multiplier=50"));
+              text.find("async_memtable_write_wait_spin_rounds=30"));
+    EXPECT_NE(std::string::npos,
+              text.find("async_memtable_write_wait_spin_delay=6"));
+    EXPECT_NE(std::string::npos,
+              text.find("async_memtable_write_wait_spin_pause_multiplier=50"));
   }
-  EXPECT_FALSE(db_->SetDBOptions({{"async_commit_wait_spin_delay", "1"}}).ok());
-  EXPECT_FALSE(db_->SetDBOptions(
-      {{"async_commit_wait_spin_pause_multiplier", "1"}}).ok());
+  EXPECT_FALSE(
+      db_->SetDBOptions({{"async_memtable_write_wait_spin_delay", "1"}}).ok());
+  EXPECT_FALSE(
+      db_->SetDBOptions(
+             {{"async_memtable_write_wait_spin_pause_multiplier", "1"}})
+          .ok());
   Close();
-  for (const auto& entry : {"async_commit_wait_spin_delay=1001",
-                            "async_commit_wait_spin_pause_multiplier=101"}) {
+  for (const auto& entry :
+       {"async_memtable_write_wait_spin_delay=1001",
+        "async_memtable_write_wait_spin_pause_multiplier=101"}) {
     DBOptions invalid;
     ASSERT_OK(GetDBOptionsFromString(parsed, entry, &invalid));
     EXPECT_TRUE(
@@ -73,11 +81,13 @@ TEST_F(AsyncCommitTest, LegacyPublicationBudgetsAreIgnoredAndNotSerialized) {
   ASSERT_OK(GetStringFromDBOptions(&text, parsed));
   EXPECT_EQ(std::string::npos, text.find("async_commit_wait_spin_us="));
   EXPECT_EQ(std::string::npos, text.find("async_commit_wait_yield_us="));
-  EXPECT_NE(std::string::npos, text.find("async_commit_wait_spin_rounds=30"));
+  EXPECT_NE(std::string::npos,
+            text.find("async_memtable_write_wait_spin_rounds=30"));
   ASSERT_OK(GetDBOptionsFromString(
-      parsed, "async_commit_wait_spin_rounds=0;", &parsed));
+      parsed, "async_memtable_write_wait_spin_rounds=0;", &parsed));
   ASSERT_OK(GetStringFromDBOptions(&text, parsed));
-  EXPECT_NE(std::string::npos, text.find("async_commit_wait_spin_rounds=0"));
+  EXPECT_NE(std::string::npos,
+            text.find("async_memtable_write_wait_spin_rounds=0"));
 }
 
 TEST_F(AsyncCommitTest, LegacyPublicationOptionsFileUsesRoundDefault) {
@@ -88,7 +98,7 @@ TEST_F(AsyncCommitTest, LegacyPublicationOptionsFileUsesRoundDefault) {
   ASSERT_OK(GetLatestOptionsFileName(dbname_, env_, &name));
   std::string contents;
   ASSERT_OK(ReadFileToString(env_, dbname_ + "/" + name, &contents));
-  const std::string key = "async_commit_wait_spin_rounds=30";
+  const std::string key = "async_memtable_write_wait_spin_rounds=30";
   const auto pos = contents.find(key);
   ASSERT_NE(std::string::npos, pos);
   contents.replace(pos, key.size(),
@@ -99,15 +109,15 @@ TEST_F(AsyncCommitTest, LegacyPublicationOptionsFileUsesRoundDefault) {
   DBOptions loaded;
   std::vector<ColumnFamilyDescriptor> columns;
   ASSERT_OK(LoadOptionsFromFile(legacy, env_, &loaded, &columns));
-  EXPECT_EQ(30U, loaded.async_commit_wait_spin_rounds);
+  EXPECT_EQ(30U, loaded.async_memtable_write_wait_spin_rounds);
 }
 
 TEST_F(AsyncCommitTest, PublicationWaitOptionsRoundTripAndValidation) {
   DBOptions parsed;
   ASSERT_OK(GetDBOptionsFromString(
       DBOptions(),
-      "enable_async_commit=true;async_commit_wait_slots=1024;"
-      "async_commit_wait_spin_rounds=64;",
+      "async_memtable_write=true;async_memtable_write_wait_slots=1024;"
+      "async_memtable_write_wait_spin_rounds=64;",
       &parsed));
   Options options(parsed, ColumnFamilyOptions());
   options.create_if_missing = true;
@@ -118,31 +128,34 @@ TEST_F(AsyncCommitTest, PublicationWaitOptionsRoundTripAndValidation) {
   for (const auto& candidate : {loaded, db_->GetDBOptions()}) {
     std::string text;
     ASSERT_OK(GetStringFromDBOptions(&text, candidate));
-    EXPECT_NE(std::string::npos, text.find("async_commit_wait_slots=1024"));
-    EXPECT_NE(std::string::npos, text.find("async_commit_wait_spin_rounds=64"));
+    EXPECT_NE(std::string::npos,
+              text.find("async_memtable_write_wait_slots=1024"));
+    EXPECT_NE(std::string::npos,
+              text.find("async_memtable_write_wait_spin_rounds=64"));
   }
-  EXPECT_FALSE(db_->SetDBOptions({{"async_commit_wait_slots", "1"}}).ok());
+  EXPECT_FALSE(
+      db_->SetDBOptions({{"async_memtable_write_wait_slots", "1"}}).ok());
   Close();
   for (const auto& count : {"0", "1025"}) {
     DBOptions invalid;
     ASSERT_OK(GetDBOptionsFromString(
-        parsed, std::string("async_commit_wait_slots=") + count, &invalid));
+        parsed, std::string("async_memtable_write_wait_slots=") + count,
+        &invalid));
     EXPECT_TRUE(
         TryReopen(Options(invalid, ColumnFamilyOptions())).IsInvalidArgument());
   }
   Reopen(options);
 }
 
-TEST_F(AsyncCommitTest, StrongVisibilityOptionsRoundTripAndValidation) {
+TEST_F(AsyncCommitTest, LazyAdvanceSequenceOptionsRoundTripAndValidation) {
   std::string serialized;
   ASSERT_OK(GetStringFromDBOptions(&serialized, DBOptions()));
-  ASSERT_NE(std::string::npos,
-            serialized.find("async_commit_strong_visibility=false"));
+  ASSERT_NE(std::string::npos, serialized.find("lazy_advance_sequence=true"));
   DBOptions parsed;
   ASSERT_OK(GetDBOptionsFromString(
       DBOptions(),
-      "enable_async_commit=true;async_commit_memtable_threads=1;"
-      "async_commit_strong_visibility=true;",
+      "async_memtable_write=true;async_memtable_write_threads=1;"
+      "lazy_advance_sequence=false;",
       &parsed));
   Options options(parsed, ColumnFamilyOptions());
   options.create_if_missing = true;
@@ -151,20 +164,17 @@ TEST_F(AsyncCommitTest, StrongVisibilityOptionsRoundTripAndValidation) {
   std::vector<ColumnFamilyDescriptor> columns;
   ASSERT_OK(LoadLatestOptions(dbname_, env_, &loaded, &columns));
   ASSERT_OK(GetStringFromDBOptions(&serialized, loaded));
-  ASSERT_NE(std::string::npos,
-            serialized.find("async_commit_strong_visibility=true"));
+  ASSERT_NE(std::string::npos, serialized.find("lazy_advance_sequence=false"));
   ASSERT_OK(GetStringFromDBOptions(&serialized, db_->GetDBOptions()));
-  ASSERT_NE(std::string::npos,
-            serialized.find("async_commit_strong_visibility=true"));
-  EXPECT_FALSE(
-      db_->SetDBOptions({{"async_commit_strong_visibility", "false"}}).ok());
+  ASSERT_NE(std::string::npos, serialized.find("lazy_advance_sequence=false"));
+  EXPECT_FALSE(db_->SetDBOptions({{"lazy_advance_sequence", "true"}}).ok());
   Close();
   Options invalid = options;
-  invalid.async_commit_memtable_threads = 0;
+  invalid.async_memtable_write_threads = 0;
   EXPECT_TRUE(TryReopen(invalid).IsInvalidArgument());
   invalid = options;
-  invalid.enable_async_commit = false;
-  invalid.async_commit_memtable_threads = 0;
+  invalid.async_memtable_write = false;
+  invalid.async_memtable_write_threads = 0;
   EXPECT_TRUE(TryReopen(invalid).IsInvalidArgument());
   Reopen(options);
   ASSERT_OK(Put("visible", "value"));
@@ -175,8 +185,9 @@ TEST_F(AsyncCommitTest, PoolOptionsRoundTrip) {
   DBOptions parsed;
   ASSERT_OK(GetDBOptionsFromString(
       DBOptions(),
-      "enable_async_commit=true;async_commit_memtable_threads=1;"
-      "max_async_commit_pending_groups=17;", &parsed));
+      "async_memtable_write=true;async_memtable_write_threads=1;"
+      "max_async_memtable_write_pending_groups=17;",
+      &parsed));
   Options options(parsed, ColumnFamilyOptions());
   options.create_if_missing = true;
   options.allow_concurrent_memtable_write = false;
@@ -187,19 +198,21 @@ TEST_F(AsyncCommitTest, PoolOptionsRoundTrip) {
   std::string serialized;
   ASSERT_OK(GetStringFromDBOptions(&serialized, loaded));
   ASSERT_NE(std::string::npos,
-            serialized.find("async_commit_memtable_threads=1"));
+            serialized.find("async_memtable_write_threads=1"));
   ASSERT_NE(std::string::npos,
-            serialized.find("max_async_commit_pending_groups=17"));
-  EXPECT_FALSE(db_->SetDBOptions({{"async_commit_memtable_threads", "2"}}).ok());
-  EXPECT_FALSE(db_->SetDBOptions({{"max_async_commit_pending_groups", "1"}}).ok());
+            serialized.find("max_async_memtable_write_pending_groups=17"));
+  EXPECT_FALSE(db_->SetDBOptions({{"async_memtable_write_threads", "2"}}).ok());
+  EXPECT_FALSE(
+      db_->SetDBOptions({{"max_async_memtable_write_pending_groups", "1"}})
+          .ok());
 }
 
 TEST_F(AsyncCommitTest, GroupFetchOptionRoundTripAndValidation) {
   DBOptions parsed;
   ASSERT_OK(GetDBOptionsFromString(
       DBOptions(),
-      "enable_async_commit=true;async_commit_memtable_threads=1;"
-      "async_commit_memtable_groups_per_fetch=4;",
+      "async_memtable_write=true;async_memtable_write_threads=1;"
+      "async_memtable_write_groups_per_fetch=4;",
       &parsed));
   Options options(parsed, ColumnFamilyOptions());
   options.create_if_missing = true;
@@ -210,13 +223,12 @@ TEST_F(AsyncCommitTest, GroupFetchOptionRoundTripAndValidation) {
   std::string serialized;
   ASSERT_OK(GetStringFromDBOptions(&serialized, loaded));
   EXPECT_NE(std::string::npos,
-            serialized.find("async_commit_memtable_groups_per_fetch=4"));
+            serialized.find("async_memtable_write_groups_per_fetch=4"));
   EXPECT_FALSE(
-      db_->SetDBOptions({{"async_commit_memtable_groups_per_fetch", "2"}})
-          .ok());
+      db_->SetDBOptions({{"async_memtable_write_groups_per_fetch", "2"}}).ok());
   for (const char* value : {"0", "65"}) {
     ASSERT_OK(GetDBOptionsFromString(
-        options, std::string("async_commit_memtable_groups_per_fetch=") + value,
+        options, std::string("async_memtable_write_groups_per_fetch=") + value,
         &parsed));
     static_cast<DBOptions&>(options) = parsed;
     EXPECT_TRUE(TryReopen(options).IsInvalidArgument());
@@ -226,38 +238,37 @@ TEST_F(AsyncCommitTest, GroupFetchOptionRoundTripAndValidation) {
 TEST_F(AsyncCommitTest, OptionsRoundTrip) {
   DBOptions parsed;
   ASSERT_OK(GetDBOptionsFromString(
-      DBOptions(),
-      "enable_async_commit=true;max_async_commit_pending_bytes=67108864;",
-      &parsed));
+      DBOptions(), "max_async_memtable_write_pending_bytes=67108864;", &parsed));
   Options options(parsed, ColumnFamilyOptions());
   options.create_if_missing = true;
   Reopen(options);
   DBOptions loaded;
   std::vector<ColumnFamilyDescriptor> columns;
   ASSERT_OK(LoadLatestOptions(dbname_, env_, &loaded, &columns));
-  ASSERT_TRUE(loaded.enable_async_commit);
-  ASSERT_EQ(67108864U, loaded.max_async_commit_pending_bytes);
-  EXPECT_FALSE(db_->SetDBOptions({{"enable_async_commit", "false"}}).ok());
+  ASSERT_TRUE(loaded.async_memtable_write);
+  ASSERT_EQ(67108864U, loaded.max_async_memtable_write_pending_bytes);
+  EXPECT_FALSE(db_->SetDBOptions({{"async_memtable_write", "false"}}).ok());
   EXPECT_FALSE(
-      db_->SetDBOptions({{"max_async_commit_pending_bytes", "1"}}).ok());
+      db_->SetDBOptions({{"max_async_memtable_write_pending_bytes", "1"}})
+          .ok());
   std::string serialized;
   ASSERT_OK(GetStringFromDBOptions(&serialized, dbfull()->GetDBOptions()));
-  ASSERT_NE(serialized.find("enable_async_commit=true"), std::string::npos);
-  ASSERT_NE(serialized.find("max_async_commit_pending_bytes=67108864"),
+  ASSERT_NE(serialized.find("async_memtable_write=true"), std::string::npos);
+  ASSERT_NE(serialized.find("max_async_memtable_write_pending_bytes=67108864"),
             std::string::npos);
 }
 
 TEST_F(AsyncCommitTest, RejectIncompatibleOpenAndTransactionWrappers) {
   Options options;
   options.create_if_missing = true;
-  options.enable_async_commit = true;
+  options.async_memtable_write = true;
   for (int which = 0; which < 5; ++which) {
     Options invalid = options;
     if (which == 0) invalid.unordered_write = true;
     if (which == 1) invalid.two_write_queues = true;
     if (which == 2) invalid.manual_wal_flush = true;
     if (which == 3) invalid.allow_2pc = true;
-    if (which == 4) invalid.max_async_commit_pending_bytes = 0;
+    if (which == 4) invalid.max_async_memtable_write_pending_bytes = 0;
     EXPECT_FALSE(TryReopen(invalid).ok());
   }
   TransactionDB* pessimistic = nullptr;
@@ -276,7 +287,7 @@ TEST_F(AsyncCommitTest, ExplicitOptimisticOptionsRejected) {
   Close();
   Options options;
   options.create_if_missing = true;
-  options.enable_async_commit = true;
+  options.async_memtable_write = true;
   std::vector<ColumnFamilyHandle*> handles;
   OptimisticTransactionDB* optimistic = nullptr;
   Status status = OptimisticTransactionDB::Open(
@@ -297,7 +308,7 @@ TEST_F(AsyncCommitTest, EmptyRangeSequenceSurvivesOptionChanges) {
     Options options;
     options.env = env_;
     options.create_if_missing = true;
-    options.enable_async_commit = initial_async;
+    options.async_memtable_write = initial_async;
     options.avoid_flush_during_shutdown = true;
     DestroyAndReopen(options);
     WriteBatch batch;
@@ -305,7 +316,7 @@ TEST_F(AsyncCommitTest, EmptyRangeSequenceSurvivesOptionChanges) {
     ASSERT_OK(batch.Put("key", "value"));
     ASSERT_OK(db_->Write(WriteOptions(), &batch));
     ASSERT_EQ(2U, db_->GetLatestSequenceNumber());
-    options.enable_async_commit = !initial_async;
+    options.async_memtable_write = !initial_async;
     Reopen(options);
     EXPECT_EQ(2U, db_->GetLatestSequenceNumber());
     EXPECT_EQ("value", Get("key"));
@@ -319,9 +330,9 @@ TEST_F(AsyncCommitTest, TrailingMetadataPreservesRecoverySequence) {
     Options options;
     options.env = env_;
     options.create_if_missing = true;
-    options.enable_async_commit = mode != 0;
+    options.async_memtable_write = mode != 0;
     options.enable_pipelined_write = true;
-    options.async_commit_memtable_threads = mode == 2 ? 1 : 0;
+    options.async_memtable_write_threads = mode == 2 ? 1 : 0;
     options.allow_concurrent_memtable_write = false;
     options.avoid_flush_during_shutdown = true;
     DestroyAndReopen(options);
@@ -332,8 +343,8 @@ TEST_F(AsyncCommitTest, TrailingMetadataPreservesRecoverySequence) {
     ASSERT_OK(db_->Write(WriteOptions(), &metadata));
     ASSERT_OK(dbfull()->WaitForAsyncCommit());
     EXPECT_EQ(1U, db_->GetLatestSequenceNumber());
-    options.enable_async_commit = false;
-    options.async_commit_memtable_threads = 0;
+    options.async_memtable_write = false;
+    options.async_memtable_write_threads = 0;
     Reopen(options);
     EXPECT_EQ(1U, db_->GetLatestSequenceNumber());
     EXPECT_EQ("acknowledged", Get("last"));
@@ -365,10 +376,10 @@ class AsyncEvent {
 TEST_F(AsyncCommitTest, PoolOwnsAcknowledgedBatchAndCloseDrains) {
   Options options;
   options.create_if_missing = true;
-  options.enable_async_commit = true;
+  options.async_memtable_write = true;
   options.enable_pipelined_write = true;
   options.allow_concurrent_memtable_write = false;
-  options.async_commit_memtable_threads = 1;
+  options.async_memtable_write_threads = 1;
   options.avoid_flush_during_shutdown = true;
   Reopen(options);
   AsyncEvent applying, release, acknowledged, closing, closed;
@@ -412,10 +423,10 @@ TEST_F(AsyncCommitTest, PoolOwnsAcknowledgedBatchAndCloseDrains) {
 TEST_F(AsyncCommitTest, PoolOutOfOrderCompletionPublishesOnlyWholePrefix) {
   Options options;
   options.create_if_missing = true;
-  options.enable_async_commit = true;
+  options.async_memtable_write = true;
   options.enable_pipelined_write = true;
   options.allow_concurrent_memtable_write = true;
-  options.async_commit_memtable_threads = 2;
+  options.async_memtable_write_threads = 2;
   Reopen(options);
   CreateAndReopenWithCF({"second"}, options);
   AsyncEvent first_started, release_first, later_applied;
@@ -470,7 +481,7 @@ class AsyncCommitModesTest : public AsyncCommitTest,
     DBOptions parsed;
     EXPECT_OK(GetDBOptionsFromString(
         DBOptions(),
-        "enable_async_commit=true;enable_pipelined_write=" +
+        "async_memtable_write=true;enable_pipelined_write=" +
             std::string((GetParam() & 1) ? "true" : "false") +
             ";allow_concurrent_memtable_write=" +
             std::string((GetParam() & 2) ? "true" : "false"),
@@ -939,7 +950,8 @@ TEST_P(AsyncCommitModesTest, EmptyWALQueueConcurrentEnqueue) {
 TEST_P(AsyncCommitModesTest, PendingCapacityAndNoSlowdown) {
   if (!(GetParam() & 1)) return;
   Options options = AsyncOptions();
-  options.max_async_commit_pending_bytes = 1;  // Metadata alone exceeds this.
+  options.max_async_memtable_write_pending_bytes =
+      1;  // Metadata alone exceeds this.
   Reopen(options);
   AsyncEvent applying, release, capacity_wait;
   std::atomic<int> applications{0};
@@ -1047,6 +1059,31 @@ TEST_P(AsyncCommitModesTest, AtomicCrossCFViewsAndIteratorRefresh) {
                                 &rejected)
                   .IsTimedOut());
   EXPECT_TRUE(rejected.empty());
+  // Even a partially inserted newer group must not delay reads through an
+  // already published cross-CF snapshot, or change the values they observe.
+  ReadOptions fixed_view;
+  fixed_view.snapshot = snapshot;
+  fixed_view.deadline = std::chrono::microseconds(env_->NowMicros() + 1000000);
+  statuses = db_->MultiGet(fixed_view, {db_->DefaultColumnFamily(), cf},
+                           {Slice("key"), Slice("key")}, &values);
+  for (const auto& status : statuses) EXPECT_OK(status);
+  EXPECT_EQ("old-default", values[0]);
+  EXPECT_EQ("old-second", values[1]);
+  std::vector<Iterator*> historical_iterators;
+  EXPECT_OK(db_->NewIterators(fixed_view, {db_->DefaultColumnFamily(), cf},
+                              &historical_iterators));
+  EXPECT_EQ(2U, historical_iterators.size());
+  for (size_t i = 0; i < historical_iterators.size(); ++i) {
+    auto* iter = historical_iterators[i];
+    iter->Seek("key");
+    EXPECT_OK(iter->status());
+    EXPECT_TRUE(iter->Valid());
+    if (iter->Valid()) {
+      EXPECT_EQ(i == 0 ? "old-default" : "old-second",
+                iter->value().ToString());
+    }
+    delete iter;
+  }
   for (size_t i = 0; i < iterators.size(); ++i) {
     iterators[i]->Seek("key");
     EXPECT_TRUE(iterators[i]->Valid());
@@ -1238,7 +1275,7 @@ TEST_F(AsyncCommitTest, DetachedFollowerReentryAndWriteStall) {
 int AsyncCommitCrashWriter(const std::string& path, int mode) {
   Options options;
   options.create_if_missing = true;
-  options.enable_async_commit = true;
+  options.async_memtable_write = true;
   options.enable_pipelined_write = (mode & 1) != 0;
   DB* db = nullptr;
   Status opened = DB::Open(options, path, &db);

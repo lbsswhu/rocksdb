@@ -15,7 +15,7 @@
 ## Global Constraints
 
 - Preserve caller-independent owned payload and reuse it for WAL and memtable; no payload copy or node allocation at post-WAL submission.
-- All worker counts use whole-group tasks. `async_commit_memtable_groups_per_fetch=1`, immutable, range [1,64]; consume available groups without waiting to fill the limit.
+- All worker counts use whole-group tasks. `async_memtable_write_groups_per_fetch=1`, immutable, range [1,64]; consume available groups without waiting to fill the limit.
 - Complete each group before applying the next locally fetched group. Do not cross an exclusive Merge fence while prefetching.
 - Single worker directly publishes continuous P. Multi-worker completion records are release/acquire transferred and merged by notifier.
 - Keep reader A, spin defaults 30/6/50, slot mutex/CV registration and fixed notification snapshots.
@@ -37,7 +37,7 @@
 
 **Files:** `db/async_commit_executor.{h,cc}`, `db/db_impl/db_impl_async_commit.cc`, `util/async_commit_event.h`, DBOptions/ImmutableDBOptions/option helpers, `tools/db_bench_tool.cc`, associated tests.
 
-**Interfaces:** `AsyncCommitTask` identifies one group; `AsyncCommitEvent::NotifyOne()` is work-ready only. Add uint32 option `async_commit_memtable_groups_per_fetch` default 1 with [1,64] validation and OPTIONS/tool round trip.
+**Interfaces:** `AsyncCommitTask` identifies one group; `AsyncCommitEvent::NotifyOne()` is work-ready only. Add uint32 option `async_memtable_write_groups_per_fetch` default 1 with [1,64] validation and OPTIONS/tool round trip.
 
 - [x] Generalize the existing owned-group test to every worker count; replace same-group parallel range expectations with sequential same-worker execution, while retaining separate-group parallelism coverage.
 - [x] Strengthen early publication to require P >= 16 while group 17 is stalled, rather than merely P >= 9. Demonstrate both failures against the baseline.

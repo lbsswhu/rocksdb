@@ -1,4 +1,41 @@
-# RocksDB 异步提交详细设计
+# RocksDB 异步 memtable 写入详细设计
+
+## 当前配置名称（2026-11-13）
+
+DBOptions、OPTIONS 文件、日志和 db_bench 命令行统一使用以下名称。
+db_bench 参数在名称前加 `--`。这些选项仍不可在 DB 打开后动态修改。
+
+| 原名称 | 当前名称 | 默认值 |
+| --- | --- | --- |
+| `enable_async_commit` | `async_memtable_write` | `true` |
+| `async_commit_strong_visibility` | `lazy_advance_sequence` | `true`，与原选项取反 |
+| `async_commit_memtable_threads` | `async_memtable_write_threads` | `0` |
+| `async_commit_memtable_groups_per_fetch` | `async_memtable_write_groups_per_fetch` | `1` |
+| `async_commit_wait_slots` | `async_memtable_write_wait_slots` | `32` |
+| `async_commit_wait_spin_rounds` | `async_memtable_write_wait_spin_rounds` | `30` |
+| `async_commit_wait_spin_delay` | `async_memtable_write_wait_spin_delay` | `6` |
+| `async_commit_wait_spin_pause_multiplier` | `async_memtable_write_wait_spin_pause_multiplier` | `50` |
+| `max_async_commit_pending_bytes` | `max_async_memtable_write_pending_bytes` | `67108864` |
+| `max_async_commit_pending_groups` | `max_async_memtable_write_pending_groups` | `4096` |
+
+`async_memtable_write` 在 DBOptions 和 db_bench 中均默认开启。
+默认 worker 数仍为 0，使用原 leader 应用 memtable；使用独立线程池时显式设置
+`async_memtable_write_threads>0`。需要普通写入路径时显式设置 `async_memtable_write=false`。
+
+`lazy_advance_sequence=true` 对应原 weak 模式：线程池写调用完成 WAL 后可返回，
+不带显式快照的读入口捕获一次当前分配水位 A，等待连续发布水位 P 覆盖 A 后读取。
+显式快照读只要求 P 覆盖快照自己的 sequence S；S <= P 时直接进入历史视图读取，
+不读取 A、不等待快照创建之后的写入。GetSnapshot 创建新快照时仍捕获 A 并等待发布。
+`lazy_advance_sequence=false` 对应原 strong 模式：每个写调用等到自己的 sequence
+发布后才返回成功，读入口直接使用已发布视图。后者要求
+`async_memtable_write=true` 且 `async_memtable_write_threads>0`。
+该参数控制调用者等待发布的方式，不改变 worker/notifier 推进连续 P 的算法。
+
+现有配置需按表迁移名称，并将原 strong visibility 的布尔值取反；新输出只使用新名称。
+旧的 `async_commit_wait_spin_us` / `async_commit_wait_yield_us` 仍兼容读取并忽略，
+不输出，也不换算为轮数。内部 AsyncCommit 类名、源文件名、统计属性名和历史测试产物路径
+保持原名。下文配置示例已按新名称和取反后的布尔值更新；历史产物中的配置保留当时名称，
+历史性能数据未重新测量。
 
 第 1～21 节记录已经落地的原 leader 应用方案（V1）；[第 22 节](#22-v2wal-与-memtable-线程池解耦方案)
 记录默认不开启的线程池方案（V2）及后续 V3 无锁任务队列实现。所有权、执行顺序、
@@ -6,8 +43,8 @@
 原生/V1/V2/V3 串行 memtable 同批重测见第 22.24 节，并发 memtable 对比见第 22.27 节；
 第 22.17～22.19 节保留早先批次。
 
-[第 23 节](#23-strong-visibility-模式)定义默认关闭的 `async_commit_strong_visibility`。
-开启该模式后，线程池写调用等到
+[第 23 节](#23-lazy-advance-sequence-与发布等待)定义默认开启的 `lazy_advance_sequence`。
+将其设为 `false` 后，线程池写调用等到
 sequence 发布再返回成功，读操作跳过发布等待，直接使用已发布视图。
 该模式的写返回与读等待规则以第 23 节为准。
 
@@ -15,7 +52,7 @@ sequence 发布再返回成功，读操作跳过发布等待，直接使用已�
 先 spin/yield，再按目标 sequence 分片等待连续发布水位 P。该规则替代下文 V1 的线程本地 R 依赖；
 strong visibility 的写发布等待也复用分片机制，读取仍跳过等待。
 
-本文定义 `enable_async_commit` 的首版实现，供修改写入队列、读路径、选项和测试时使用。代码基线为 RocksDB 6.26.1，提交 `4d57a393a`。
+本文定义 `async_memtable_write` 的首版实现，供修改写入队列、读路径、选项和测试时使用。代码基线为 RocksDB 6.26.1，提交 `4d57a393a`。
 
 首版采用以下执行方式：一个 WAL 写入组的原 leader 持有整组数据，并负责整组 memtable 插入；followers 在 WAL 阶段成功后返回。每个返回成功的写调用记录自己的结束 sequence，后续同一线程对同一 DB 的读请求先等待该序号发布。开启 `enable_pipelined_write` 时，下一组 WAL 可以与当前组 memtable 插入重叠，但各组 memtable 仍按 WAL 顺序执行。
 
@@ -69,7 +106,7 @@ sequence 是 RocksDB 为更新分配的递增序号。普通按记录计数的 b
 
 ## 2 已确认的设计要求
 
-1. 新增不可动态修改的 DB 选项 `enable_async_commit`，默认 `false`。
+1. 新增不可动态修改的 DB 选项 `async_memtable_write`，当前默认 `true`（2026-11-13 调整）。
 2. 开启后，每个 group 的原 leader 负责本组全部 memtable 插入。
 3. followers 在本组 WAL 阶段成功且数据已安全接管后返回，不参与 memtable 插入。
 4. leader 在本组 memtable 应用和队列清理完成后返回。
@@ -441,7 +478,7 @@ Status WaitUntilPublished(SequenceNumber target, const ReadOptions& options) {
 
 当前 GetImpl 被内部路径复用，GetSnapshotImpl 也有不自行加锁的内部调用。用户读等待应接到对外入口或一个明确的用户读取准备函数；不得给所有内部调用无条件增加等待，尤其不能让正在应用的 leader 等待自己尚未发布的 group。
 
-显式历史快照仍然表示历史视图。首版先完成当前上下文的发布等待，再按用户给定快照读取；不把快照序号抬高，也不承诺旧快照看到后来的写入。已经存在的普通 Iterator 在 Seek、Next 时继续使用原视图，不逐步等待新的 R。用户需要新视图时应创建新 Iterator 或调用支持的 Refresh。
+显式历史快照仍然表示历史视图。当前实现（2026-11-13）只等待其自身 sequence S 被 P 覆盖，S <= P 时直接读取，不再等待当前分配水位 A；不把快照序号抬高，也不承诺旧快照看到后来的写入。已经存在的普通 Iterator 在 Seek、Next 时继续使用原视图，不逐步等待新的 R。用户需要新视图时应创建新 Iterator 或调用支持的 Refresh。
 
 `ReadOptions::deadline` 的剩余时间必须包含读前等待；不能等待结束后重新给予完整超时。`io_timeout` 是底层 I/O 超时，不自动当作整个序号等待的截止时间。GetSnapshot 没有独立读取 deadline，等待到目标发布、终止错误或关闭；无法提供 Status 是现有接口限制。
 
@@ -501,7 +538,7 @@ CloseHelper 的关闭标记应通知等待者，作为受控关闭和错误处�
 
 followers 返回后，多请求组的 WAL 合并缓冲区仍由等待应用的 group 持有。记录 pending bytes，包含排队及执行中 group 持有的合并数据、保护信息、范围描述和必要元数据；不把这些字节误报为已进入 memtable。
 
-为限制待应用缓冲区占用，首版增加不可动态修改的 `max_async_commit_pending_bytes`，默认 64 MiB。这个值是初始资源上限，不代表最优性能配置。开关关闭时不建立这项预留。
+为限制待应用缓冲区占用，首版增加不可动态修改的 `max_async_memtable_write_pending_bytes`，默认 64 MiB。这个值是初始资源上限，不代表最优性能配置。开关关闭时不建立这项预留。
 
 非零上限是有效配置，零值在打开时拒绝，避免“禁止所有写入”和“不限容量”两种解释。预留依据合并缓冲区实际容量、保护信息容量、范围描述及组元信息的保守上界；不能只用序列化 ByteSize 就宣称限制了全部持有内存。若实际分配需要调整预算，必须在 WAL 前完成。
 
@@ -573,7 +610,7 @@ follower
 | [pessimistic_transaction_db.cc](D:/code/rocksdb/utilities/transactions/pessimistic_transaction_db.cc) 和 [optimistic_transaction_db_impl.cc](D:/code/rocksdb/utilities/transactions/optimistic_transaction_db_impl.cc) | 在包装层 Open 阶段拒绝不支持的 async 配置 |
 | [DBOptionsInterface.java](D:/code/rocksdb/java/src/main/java/org/rocksdb/DBOptionsInterface.java)、[DBOptions.java](D:/code/rocksdb/java/src/main/java/org/rocksdb/DBOptions.java)、[Options.java](D:/code/rocksdb/java/src/main/java/org/rocksdb/Options.java) 与 [JNI options.cc](D:/code/rocksdb/java/rocksjni/options.cc) | Java 选项接口及两个 native 选项容器的访问方法 |
 | [perf_context.h](D:/code/rocksdb/include/rocksdb/perf_context.h) 及 monitoring 实现 | 新增等待、复制、应用指标时同步 reset、输出和测试 |
-| [db_bench_tool.cc](D:/code/rocksdb/tools/db_bench_tool.cc) | 新增 enable_async_commit 和 max_async_commit_pending_bytes 命令行参数，将其传入 Options；输出纯写基准所需的统计与最终完成检查 |
+| [db_bench_tool.cc](D:/code/rocksdb/tools/db_bench_tool.cc) | 新增 async_memtable_write 和 max_async_memtable_write_pending_bytes 命令行参数，将其传入 Options；输出纯写基准所需的统计与最终完成检查 |
 | [CMakeLists.txt](D:/code/rocksdb/CMakeLists.txt) 与 [Makefile](D:/code/rocksdb/Makefile) | 注册新增测试目标 |
 
 新增测试文件计划为 `D:/code/rocksdb/db/async_commit_test.cc`。复用现有 db_write_test 中的 SyncPoint 和故障注入方法；SyncPoint 用于在指定代码位置同步线程，从而确定地控制执行交错。选项回归加入 db_options_test、options_settable_test、options_file_test 及 Java 的 OptionsTest、DBOptionsTest。
@@ -684,10 +721,10 @@ fillrandom 每轮使用独立的测试 DB 目录，并显式指定 `use_existing
   --use_fsync=1 \
   --disable_wal=0 \
   --unordered_write=0 \
-  --enable_async_commit=1 \
+  --async_memtable_write=1 \
   --enable_pipelined_write=1 \
   --allow_concurrent_memtable_write=0 \
-  --max_async_commit_pending_bytes=67108864 \
+  --max_async_memtable_write_pending_bytes=67108864 \
   --statistics=1 \
   --histogram=1
 ```
@@ -806,10 +843,10 @@ V2 保留原始 WAL group 作为数据、确认和发布的基本单位，另外
 
 | 选项 | 默认值 | 含义 |
 | --- | --- | --- |
-| `async_commit_memtable_threads` | `0` | `0` 保持 V1；正整数启用该 DB 独立线程池，数量为固定 worker 数；负值拒绝 |
-| `max_async_commit_pending_groups` | `4096` | 线程池模式下已预留、排队、执行和等待按序退休的 group 数上限；零值拒绝 |
+| `async_memtable_write_threads` | `0` | `0` 保持 V1；正整数启用该 DB 独立线程池，数量为固定 worker 数；负值拒绝 |
+| `max_async_memtable_write_pending_groups` | `4096` | 线程池模式下已预留、排队、执行和等待按序退休的 group 数上限；零值拒绝 |
 
-`enable_async_commit=false` 时线程数必须为零，避免配置写错却悄悄未启用。`max_async_commit_pending_bytes` 沿用默认 64 MiB，并按第 22.11 节扩展计费范围。
+`async_memtable_write=false` 时线程数必须为零，避免配置写错却悄悄未启用。`max_async_memtable_write_pending_bytes` 沿用默认 64 MiB，并按第 22.11 节扩展计费范围。
 
 `allow_concurrent_memtable_write=false` 只允许配置 1 个 worker；多于 1 个时 Open 返回 InvalidArgument。配置 1 个 worker 且无并发插入时走串行 Add 路径。配置多个 worker 必须显式开启 `allow_concurrent_memtable_write=true`，并对所有现有、新建 CF 执行 `CheckConcurrentWritesSupported`，不能绕过 memtable factory 的能力检查。开启并发选项且只有 1 个 worker 也是有效配置，执行仍按串行路径处理。
 
@@ -1106,17 +1143,17 @@ Debug、ASan+UBSan、TSan 均跑实际测试并确认用例数；文件系统故
 
 ### 22.16 实现配置与观测入口
 
-默认 `async_commit_memtable_threads=0`，保留 V1 原 leader 应用。串行 memtable 的线程池配置为：
+默认 `async_memtable_write_threads=0`，保留 V1 原 leader 应用。串行 memtable 的线程池配置为：
 
 ```cpp
 Options options;
-options.enable_async_commit = true;
+options.async_memtable_write = true;
 options.enable_pipelined_write = false;  // 不影响线程池的 WAL 确认返回。
-options.async_commit_memtable_threads = 1;
+options.async_memtable_write_threads = 1;
 options.allow_concurrent_memtable_write = false;
 ```
 
-需要并发应用时，显式将 `async_commit_memtable_threads` 设为 `2` 或 `4`，同时开启 `allow_concurrent_memtable_write=true`。这属于新增的并发能力；与 V1 的性能对照仍固定串行 memtable。选项均已接入 OPTIONS 往返、日志、BuildDBOptions 和 db_bench，不能通过 SetDBOptions 动态修改。线程池模式下，两种 pipelined 配置都会在 WAL 成功且 owned group 入队后返回整个调用组，包含 leader；不持有 WAL gate 等待本组应用。
+需要并发应用时，显式将 `async_memtable_write_threads` 设为 `2` 或 `4`，同时开启 `allow_concurrent_memtable_write=true`。这属于新增的并发能力；与 V1 的性能对照仍固定串行 memtable。选项均已接入 OPTIONS 往返、日志、BuildDBOptions 和 db_bench，不能通过 SetDBOptions 动态修改。线程池模式下，两种 pipelined 配置都会在 WAL 成功且 owned group 入队后返回整个调用组，包含 leader；不持有 WAL gate 等待本组应用。
 
 `DBImpl::WaitForAsyncCommit()` 是测试和 db_bench 使用的内部完成入口，通过 unbatched WAL 屏障捕获当前组边界；不增加公共 DB API，也不通过 Get/Flush 实现 drain。正常 Close 会先排空所有已确认的后台组，再 join 专用线程池。错误 drain 同样等待取消/在途任务和资源清理，返回首次终止错误。
 
@@ -1267,9 +1304,9 @@ V2 每次领取平均覆盖 **4.54 个 WAL group / 35.16 个请求范围**。这
 
 ### 模式定义与方法
 
-- 原生：同一最新 Release 二进制，`enable_async_commit=false`、worker=0。
-- V1：同一最新二进制中的原 leader 应用回退路径，`enable_async_commit=true`、worker=0；leader 仍等待应用，followers 在 WAL 后可返回。不是使用早期独立二进制。
-- V2：最新修正版线程池路径，`enable_async_commit=true`、worker=1；两种 pipelined 配置均在 WAL 成功且 owned 数据入队后让整组调用者返回。
+- 原生：同一最新 Release 二进制，`async_memtable_write=false`、worker=0。
+- V1：同一最新二进制中的原 leader 应用回退路径，`async_memtable_write=true`、worker=0；leader 仍等待应用，followers 在 WAL 后可返回。不是使用早期独立二进制。
+- V2：最新修正版线程池路径，`async_memtable_write=true`、worker=1；两种 pipelined 配置均在 WAL 成功且 owned 数据入队后让整组调用者返回。
 - 所有模式显式串行 memtable，`allow_concurrent_memtable_write=false`；16 前台线程、直接随机 Put、batch=1、key=16 B、value=1 KiB、key 空间 1,000,000。随机重复键会覆盖旧值，不做 Get 后 Put。
 - WAL 开启，`use_fsync=true`，sync/pipelined 分开测试；NoCompression、64 MiB memtable、2 个写缓冲、max_background_jobs=2，正常 flush/compaction。
 - slow yield=3 μs、max yield=100 μs、adaptive yield 开启；保持默认等待阈值。每个样本新建 DB，保存 OPTIONS/LOG 后清理本轮临时 DB。
@@ -1524,7 +1561,7 @@ Linux 使用 expected-value futex 等待保证检查与休眠之间不漏信号�
 
 ### 实现入口与版本口径
 
-V3 使用 `enable_async_commit=true, async_commit_memtable_threads>0`；没有新增用户必须选择的版本开关。`async_commit_memtable_threads=0` 保留 V1。V2 以修改前保存的 Release 可执行文件、共享库和源文件快照参与性能对照，不把新实现改名后当作旧版本运行。
+V3 使用 `async_memtable_write=true, async_memtable_write_threads>0`；没有新增用户必须选择的版本开关。`async_memtable_write_threads=0` 保留 V1。V2 以修改前保存的 Release 可执行文件、共享库和源文件快照参与性能对照，不把新实现改名后当作旧版本运行。
 
 主要路径如下：
 
@@ -1594,7 +1631,7 @@ executor 矩阵仍为 worker=1/2/4、pipelined=false/true、sync=false/true。�
 - 全部为串行 memtable，`allow_concurrent_memtable_write=false`；V2/V3 都只有 1 个 memtable worker。16 前台线程、直接随机 Put、batch=1、key=16 B、value=1024 B、key 空间 100 万。重复随机 key 会覆盖旧值，不做 Get 后 Put。
 - WAL 开启，`use_fsync=true`；两种 sync 分开报告。无压缩，64 MiB write buffer、2 个 write buffer、2 个后台作业，保留正常 flush/compaction。每次新建独立 DB，保存有效 OPTIONS/LOG 后清理本次 DB。
 - 前台 adaptive yield 保持开启，slow/max yield 为默认 3/100 μs。V3 空闲期限固定 50 μs；没有固定 WAL 聚合 sleep。
-- 原生为 `enable_async_commit=false`；V1 为 async 开启、worker=0；V2 为修改前归档的旧可执行文件和旧共享库、worker=1；V3 为当前实现、worker=1。原生/V1/V3 使用同一个当前 Release 可执行文件和库，编译选项与 V2 相同。
+- 原生为 `async_memtable_write=false`；V1 为 async 开启、worker=0；V2 为修改前归档的旧可执行文件和旧共享库、worker=1；V3 为当前实现、worker=1。原生/V1/V3 使用同一个当前 Release 可执行文件和库，编译选项与 V2 相同。
 - 每个 V2 样本单独设置 `LD_LIBRARY_PATH` 指向归档目录，并核对实际 `/proc` 库映射；没有让旧可执行文件意外加载新库。每个样本核实实际可执行文件、有效 OPTIONS、计数及 drain。
 - 主吞吐包含前台写入与最终内部 drain，不通过 Get 或强制 Flush 完成。正式期间不并行运行构建、功能测试或其他基准，也未清缓存或设置 CPU affinity。
 
@@ -1728,7 +1765,7 @@ NoSync 每千写只有约 0.9～1.3 次空闲休眠；同步写约 63 次，与�
 
 ## 22.26 本地提交基线（2026-11-06）
 
-根据用户请求，将当前完整实现保存为 `async-commit-worktree` 分支的本地提交基线，供后续优化继续。范围包括 enable_async_commit、V1 回退、V3 无锁任务交接与 worker 轮询、sequence/读前等待、管理及资源屏障、正确性测试、设计和性能定位记录。
+根据用户请求，将当前完整实现保存为 `async-commit-worktree` 分支的本地提交基线，供后续优化继续。范围包括 async_memtable_write、V1 回退、V3 无锁任务交接与 worker 轮询、sequence/读前等待、管理及资源屏障、正确性测试、设计和性能定位记录。
 
 提交前重新运行 Debug 的 464 项 async/executor/queue 测试和 81 项相关回归，共 545 项全部通过；源码与此前 ASAN/UBSAN、TSAN 及正式性能验证的产品快照一致。记录位于 `build/async-commit-checkpoint/`。
 
@@ -1738,7 +1775,7 @@ NoSync 每千写只有约 0.9～1.3 次空闲休眠；同步写约 63 次，与�
 
 ### 配置与完成口径
 
-基于本地提交 `8fe481080d9022fda26b0c3bcd7d7bf2c544528c`，所有配置使用同一个已验证的 Release 可执行文件和共享库。这里“原生”指当前提交关闭 `enable_async_commit` 后的原生写入路径。产品源码、原有 Release 构建和默认参数均未改动。
+基于本地提交 `8fe481080d9022fda26b0c3bcd7d7bf2c544528c`，所有配置使用同一个已验证的 Release 可执行文件和共享库。这里“原生”指当前提交关闭 `async_memtable_write` 后的原生写入路径。产品源码、原有 Release 构建和默认参数均未改动。
 
 6 个模式 × sync 开/关 × pipelined write 开/关 × 3 轮，共 72 个正式样本；每次 30 秒，每轮打乱顺序。另有 24 个 2 秒预检及 3 个独立 CPU profile，不计入正式结果。此次重新测量串行参考组，不把第 22.24 节的三次 60 秒结果混入统计；短运行的 LSM 演化与之前不同。
 
@@ -1840,16 +1877,17 @@ python3 build/async-concurrent-perf/compare.py --duration=30 --rounds=3 --out=bu
 python3 build/async-concurrent-perf/analyze.py build/async-concurrent-perf/repeat-30s
 ```
 
-## 23. Strong visibility 模式
+## 23. Lazy advance sequence 与发布等待
 
 ### 23.1 目标与配置
 
-新增不可动态修改的 DBOptions::async_commit_strong_visibility，默认 false。
-开启时要求 enable_async_commit=true 且 async_commit_memtable_threads>0；
+DBOptions::lazy_advance_sequence 不可动态修改，默认 true。
+设为 false 时要求 async_memtable_write=true 且 async_memtable_write_threads>0；
 不隐式开启 async commit 或创建线程池。不满足条件时 Open 返回 InvalidArgument。
 支持 enable_pipelined_write 开关、WriteOptions::sync 开关，以及现有的单/多 worker
 配置；多 worker 继续要求 allow_concurrent_memtable_write=true。
-该模式复用 V3 的 WAL 与 memtable 分离架构，改变成功返回的可见性条件。
+false 对应 strong visibility，复用 V3 的 WAL 与 memtable 分离架构，改变成功返回的可见性条件。
+下文 23.2～23.6 描述 false 时的发布等待；true 保留默认的读前等待行为。
 
 ### 23.2 写入、发布与返回
 
@@ -1873,16 +1911,17 @@ Close 继续要求用户 API 调用已静止，不新增并发 Close/Write 的�
 
 ### 23.3 读操作
 
-strong visibility 开启时，成功写入已经发布，不再建立线程本地的读前 sequence 依赖。
+lazy_advance_sequence=false 时，成功写入已经发布，不再建立线程本地的读前 sequence 依赖。
 所有用户读入口的 PrepareAsyncCommitRead 直接跳过 async commit 的等待逻辑，
 Get、MultiGet、迭代器和新 snapshot 使用正常的已发布视图。
 正在执行但尚未返回的写不会让读等待其分配水位；显式旧 snapshot 和既有迭代器继续
-保持原有历史视图。关闭该模式时，保留现有线程 sequence 上下文和读前等待行为。
+保持原有历史视图。lazy_advance_sequence=true 时，读入口固定捕获分配水位 A 并等待 P；
+当前实现不再使用早期版本的线程 sequence 上下文。
 
 ### 23.4 实施与验证
 
 1. 补齐 DBOptions/ImmutableDBOptions、配置解析与回写、OPTIONS/日志、db_bench 参数
-   和 Open 配置校验，并记录默认关闭及依赖条件。db_bench 在 strong 模式下将 API
+   和 Open 配置校验，并记录默认 true 及 false 时的依赖条件。db_bench 在 strong 模式下将 API
    返回摘要标为 published-ack，延迟包含发布等待；原模式继续使用 wal-ack。
 2. 在公共写返回路径添加 sequence 发布等待，覆盖 leader/follower；复用现有
    async_commit_mutex_/async_commit_cv_ 的发布、错误和关闭通知，先释放 WAL 队列再等待。
@@ -1941,14 +1980,14 @@ verification-{debug,asan,tsan}.json 保存退出码、测试计数、命令、�
 新增线程池测试可单独运行：
 
 ```sh
-./build/async_commit_executor_test --gtest_filter='*StrongVisibility*'
+./build/async_commit_executor_test --gtest_filter='*EagerSequence*'
 ```
 
 ## 23.7 Strong visibility 性能对比
 
 ### 条件、配置和计数核验
 
-本轮在用户确认可以开始、其他负载已停后运行。重新构建当前工作区 Release（-O3 -DNDEBUG，无 sanitizer），八种模式使用同一个可执行文件及动态库。原生指本工作区关闭 enable_async_commit 的原生写入路径；Weak 指 strong_visibility=false 的当前 V3，Strong 指 strong_visibility=true。不混入第 22 节的历史样本。
+本轮在用户确认可以开始、其他负载已停后运行。重新构建当前工作区 Release（-O3 -DNDEBUG，无 sanitizer），八种模式使用同一个可执行文件及动态库。原生指本工作区关闭 async_memtable_write 的原生写入路径；Weak 指 lazy_advance_sequence=true 的当前 V3，Strong 指 lazy_advance_sequence=false。不混入第 22 节的历史样本。
 
 8 模式 × sync/pipeline 四个组合 × 3 轮，共 96 个正式样本，每次 30 秒，每轮使用固定种子打乱顺序。另有 32 个 2 秒预检，全部排除出统计。16 个前台、batch=1、key=16 B、value=1 KiB、1M key 空间、seed=1000、fillrandom 直接 Put（含覆盖），每次全新 DB。WAL 开启、use_fsync=true、SkipListFactory、无压缩；64 MiB memtable、max_write_buffer_number=2、max_background_jobs=2，保留自动 flush/compaction 和 L0 slowdown/stop=20/36。等待参数仍为 slow yield 3 μs、max yield 100 μs、自适应开启，worker 空闲阈值 50 μs。
 
@@ -2081,7 +2120,7 @@ uv run --with matplotlib python build/async-strong-perf/plot.py build/async-stro
 
 ### 24.1 条件与合法配置
 
-本轮基于提交 6df8d54e302e0f6883718990749ec1ca1c4fe527；同一最新 Release 可执行文件和动态库，全部明确设置 async_commit_strong_visibility=false。用户确认其他负载已停好，并选择纯写、纯读、50/50 混合三种负载。原生指关闭 enable_async_commit 的普通写入路径；Async 数字是额外 memtable worker 数，C 是 allow_concurrent_memtable_write。
+本轮基于提交 6df8d54e302e0f6883718990749ec1ca1c4fe527；同一最新 Release 可执行文件和动态库，全部明确设置 lazy_advance_sequence=true。用户确认其他负载已停好，并选择纯写、纯读、50/50 混合三种负载。原生指关闭 async_memtable_write 的普通写入路径；Async 数字是额外 memtable worker 数，C 是 allow_concurrent_memtable_write。
 
 原生及 1 worker 分别测 C=off/on；2/4/8 worker 仅测 C=on，因为当前实现明确拒绝多 worker 且 C=off 的配置，未在脚本中偷偷打开。1 worker 即使 C=on 也只有一个 worker 应用 memtable。纯写与混合各覆盖 7 模式 × sync/pipeline 四种组合=28 个配置；纯读没有 WAL/memtable 写，sync/pipeline 不生效，仅测 7 模式，固定两者为 off。合计 63 个合法配置 × 3 轮=189 个正式样本，每次 30 秒，每轮固定种子打乱顺序。
 
@@ -2220,7 +2259,7 @@ uv run --with matplotlib python build/async-readwrite-perf/plot.py build/async-r
 | Async 4 C=on | 44,229 | 646.35 | 13.03 | 51.108 |
 | Async 8 C=on | 111,950 | 15.48 | 14.83 | 0.062 |
 
-正式矩阵之后单独重放 Async 1、C=off、sync=false、pipeline=off 的混合负载 20 秒，在预热结束约 8 秒后获取一次 GDB 全线程调用栈。此运行不计入 189 个正式样本。实际 OPTIONS 确认 strong_visibility=false；160,950 次 Get、160,934 次 Put 的原子计数、命中、字节数与外层直方图一致，最终排空成功。
+正式矩阵之后单独重放 Async 1、C=off、sync=false、pipeline=off 的混合负载 20 秒，在预热结束约 8 秒后获取一次 GDB 全线程调用栈。此运行不计入 189 个正式样本。实际 OPTIONS 确认 lazy_advance_sequence=true；160,950 次 Get、160,934 次 Put 的原子计数、命中、字节数与外层直方图一致，最终排空成功。
 
 该快照中，16 个前台均位于 ReadRandomWriteRandom → DBImpl::Get → PrepareAsyncCommitRead → WaitForAsyncCommitSequence → pthread_cond_wait，等待同一个条件变量；唯一 worker 位于 AsyncCommitExecutor::Run → pthread_cond_broadcast → futex_wake，广播目标就是同一个条件变量。等待目标来自本线程此前成功确认写的 required_sequence，读取在选择新视图前等待已发布水位覆盖它。
 
@@ -2237,11 +2276,11 @@ uv run --with matplotlib python build/async-readwrite-perf/plot.py build/async-r
 
 WAL leader 保持原有的组内 sequence 分配顺序。在记录数校验成功、更新 WriteThread 分配水位之后，WAL IO 之前，以 release store 更新 DB 私有的原子已分配水位 A。该变量不复用原生 two_write_queues 使用的 LastAllocatedSequence，也不向其他线程暴露非原子的 WriteThread::last_sequence_。
 
-弱可见模式的 Get、MultiGet、KeyMayExist、GetMergeOperands、新 Iterator、Iterator Refresh 和 GetSnapshot 等用户读取边界，进入已有 PrepareAsyncCommitRead 时，用 acquire load 一次截取 A；同时覆盖恢复或管理操作已发布的 LastSequence，形成固定目标 T。等待期间不再读取 A，不追赶随后分配的写。成功条件仍为连续发布水位 P >= T，而非某个 worker 完成了对应范围。跨线程读取也等待入口前已分配但尚未完成 WAL 或 memtable 的写；这是本次明确采用的可见性变化。
+弱可见模式下，不带显式快照的 Get、MultiGet、KeyMayExist、GetMergeOperands、新 Iterator、Iterator Refresh 和 GetSnapshot 等用户读取边界，进入已有 PrepareAsyncCommitRead 时，用 acquire load 一次截取 A；同时覆盖恢复或管理操作已发布的 LastSequence，形成固定目标 T。等待期间不再读取 A，不追赶随后分配的写。成功条件仍为连续发布水位 P >= T，而非某个 worker 完成了对应范围。跨线程读取也等待入口前已分配但尚未完成 WAL 或 memtable 的写；这是本次明确采用的可见性变化。
 
 恢复后尚未进行异步写时，已发布水位覆盖初始值为零的私有 A。分配前拒绝的请求不提高 A；分配后 WAL 失败进入原有终止错误状态，唤醒等待者并返回错误，不通过跳过失败范围来提高 P。空 batch/LogData 不消耗新的 sequence。
 
-strong visibility 模式继续在写返回前等待各 writer 的结束 sequence，读取跳过发布等待。显式历史 snapshot 的读取结果不提高 sequence；既有 Iterator 的 Seek/Next 保持原视图。用户读取边界仍先执行发布等待，再采用显式 snapshot；内部 GetImpl 不增加该等待，避免 memtable 应用中的内部读取等待自身。
+strong visibility 模式继续在写返回前等待各 writer 的结束 sequence，读取跳过发布等待。显式历史 snapshot 的读取结果不提高 sequence；既有 Iterator 的 Seek/Next 保持原视图。2026-11-13 起，显式 snapshot 的读取目标改为其自身 sequence S，P >= S 即直接读取，不再等待后来分配的 A；GetSnapshot 创建新快照仍按普通入口等待。内部 GetImpl 不增加该等待，避免 memtable 应用中的内部读取等待自身。
 
 ### 25.2 spin、yield、阻塞三个阶段
 
@@ -2249,7 +2288,7 @@ strong visibility 模式继续在写返回前等待各 writer 的结束 sequence
 
 | 选项 | 默认值 | 含义 |
 | --- | ---: | --- |
-| async_commit_wait_slots | 32 | mutex/CV 槽数，合法范围 1～1024 |
+| async_memtable_write_wait_slots | 32 | mutex/CV 槽数，合法范围 1～1024 |
 | async_commit_wait_spin_us | 10 | CPU pause 自旋时长，0 表示跳过 |
 | async_commit_wait_yield_us | 40 | 自旋后继续 scheduler yield 的时长，0 表示跳过 |
 
@@ -2289,7 +2328,7 @@ Release db_bench 另完成 7 组按操作数限定的功能冒烟：1 worker 覆
 
 ### 26.1 测试范围与口径
 
-本轮独立重测原生、优化前及优化后 Release 版本，strong visibility 全部关闭。原生使用当前程序 enable_async_commit=false；优化前为归档 6df8d54e3 程序及库，哈希与第 24 节一致；优化后为第 25 节未提交实现。111 组配置，每组 3 次 15 秒，共 333 个正式样本；另 111 次 2 秒预检不计入结果。样本顺序分轮打乱，首轮优先采集三个单 worker 混合关键对照。
+本轮独立重测原生、优化前及优化后 Release 版本，strong visibility 全部关闭。原生使用当前程序 async_memtable_write=false；优化前为归档 6df8d54e3 程序及库，哈希与第 24 节一致；优化后为第 25 节未提交实现。111 组配置，每组 3 次 15 秒，共 333 个正式样本；另 111 次 2 秒预检不计入结果。样本顺序分轮打乱，首轮优先采集三个单 worker 混合关键对照。
 
 固定 16 个前台线程、100 万个既有键、16B key、1KiB value，独立 DB 克隆，仅 SST 硬链接；每进程先完整单线程扫描，预热 2GiB block cache。无压缩、row cache 关闭、WAL 开启、use_fsync=true、64MiB write buffer、最多 2 个 buffer，正常后台 flush/compaction。Async 在16个前台之外另有1/2/4/8个专用 worker，总线程/CPU预算并不与原生相等；大于1必须开启 concurrent memtable write。表内 C 表示 allow_concurrent_memtable_write，单 worker 即使 C=on 仍只有一个实际 memtable 应用线程。
 

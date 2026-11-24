@@ -12,8 +12,8 @@
 
 ## Global constraints
 
-- `enable_async_commit=false` by default; old paths stay unchanged when disabled.
-- `max_async_commit_pending_bytes=67108864`, immutable and nonzero.
+- `async_memtable_write=true` by default (updated 2026-11-13); explicitly disable it for the ordinary write path.
+- `max_async_memtable_write_pending_bytes=67108864`, immutable and nonzero.
 - WAL and memtable reuse one group buffer; single-writer groups borrow the caller batch.
 - Never access follower Writer/batch after notification. One original leader applies each group serially.
 - Publish only complete groups, never advance past a terminal error. Read waiting precedes SuperVersion acquisition.
