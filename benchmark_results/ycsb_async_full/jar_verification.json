@@ -1,0 +1,11 @@
+{
+  "jars": {
+    "java/target/rocksdbjni-6.26.1-linux64.jar": "fb3d369fda8cd406246c1948a93680e9fc3a029af05ed0aa7c08606ce2fe975d",
+    "/home/lb/.m2/repository/org/rocksdb/rocksdbjni/6.26.1/rocksdbjni-6.26.1.jar": "fb3d369fda8cd406246c1948a93680e9fc3a029af05ed0aa7c08606ce2fe975d",
+    "/home/lb/.m2/repository/org/rocksdb/rocksdbjni/6.26.1/rocksdbjni-6.26.1-linux64.jar": "fb3d369fda8cd406246c1948a93680e9fc3a029af05ed0aa7c08606ce2fe975d",
+    "/home/lb/YCSB/rocksdb/target/dependency/rocksdbjni-6.26.1-linux64.jar": "fb3d369fda8cd406246c1948a93680e9fc3a029af05ed0aa7c08606ce2fe975d"
+  },
+  "native_sha256": "c4e8496a84462dbacb73913250392ed8e458dfae971d62f73161a13c2bc6419f",
+  "embedded_matches": true,
+  "runtime_matches": true
+}

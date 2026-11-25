@@ -1,0 +1,4 @@
+#!/bin/bash
+set -e
+cd /home/lb/YCSB
+exec python3 ./bin/ycsb "$@" -p maxexecutiontime="$YCSB_LIMIT_SECONDS" -jvm-args "-Xms2g -Xmx4g -Djava.library.path=$YCSB_EMPTY_LIB $YCSB_EXTRA_JVM"

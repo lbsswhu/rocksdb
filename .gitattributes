@@ -1,0 +1,4 @@
+# Preserve the original benchmark input snapshots byte for byte.
+benchmark_results/**/source_snapshot/** -text whitespace=-blank-at-eol,-blank-at-eof,-space-before-tab
+benchmark_results/**/*.csv text eol=lf
+benchmark_results/**/raw_logs.tar.gz -text -diff

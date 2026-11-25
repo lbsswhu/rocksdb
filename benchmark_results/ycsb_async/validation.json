@@ -1,0 +1,15 @@
+{
+  "status": "passed",
+  "formal_samples": 90,
+  "warmups": 90,
+  "configurations": 30,
+  "repeats": 3,
+  "runtime_native_mappings_verified": 180,
+  "non_ok_returns": 0,
+  "measured_return_ok_operations": 1381091969,
+  "backup_metadata_unchanged": true,
+  "source_and_jni_checksums_unchanged": true,
+  "binding_class_audit": "passed",
+  "min_runtime_ms": 60025.0,
+  "max_runtime_ms": 60411.0
+}

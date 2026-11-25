@@ -1,0 +1,10 @@
+{
+  "combinations": 168,
+  "runs": 504,
+  "async_runs": 432,
+  "native_runs": 72,
+  "max_observed_cpu_cores": 15.930064714113966,
+  "max_drain_us": 46874,
+  "sha256": "8a0ff8de0557d977b8b3d1818602d181e0d87f3bfe08102c4a6bb9f0a1b5ca93",
+  "status": "passed"
+}

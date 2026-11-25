@@ -1,0 +1,74 @@
+{
+  "commit": "f01cbdddc5a0084137fb92a5899c14da71f9f1b7",
+  "args": {
+    "probe": true,
+    "seconds": 60,
+    "repeats": 3
+  },
+  "configs": [
+    {
+      "name": "native_p0",
+      "async_": false,
+      "workers": 0,
+      "lazy": true,
+      "pipeline": false
+    },
+    {
+      "name": "native_p1",
+      "async_": false,
+      "workers": 0,
+      "lazy": true,
+      "pipeline": true
+    },
+    {
+      "name": "async_w1_lazy1",
+      "async_": true,
+      "workers": 1,
+      "lazy": true,
+      "pipeline": false
+    },
+    {
+      "name": "async_w2_lazy1",
+      "async_": true,
+      "workers": 2,
+      "lazy": true,
+      "pipeline": false
+    },
+    {
+      "name": "async_w2_lazy0",
+      "async_": true,
+      "workers": 2,
+      "lazy": false,
+      "pipeline": false
+    }
+  ],
+  "native_sha256": "c4e8496a84462dbacb73913250392ed8e458dfae971d62f73161a13c2bc6419f",
+  "cgroup": "13:hugetlb:/docker/b8902a664a30ee7f9b3d058b01cf2d093f7adf549218028d2d50ff7ffdcb313b\n12:freezer:/docker/b8902a664a30ee7f9b3d058b01cf2d093f7adf549218028d2d50ff7ffdcb313b\n11:cpuset:/docker/b8902a664a30ee7f9b3d058b01cf2d093f7adf549218028d2d50ff7ffdcb313b\n10:memory:/docker/b8902a664a30ee7f9b3d058b01cf2d093f7adf549218028d2d50ff7ffdcb313b\n9:blkio:/docker/b8902a664a30ee7f9b3d058b01cf2d093f7adf549218028d2d50ff7ffdcb313b\n8:rdma:/docker/b8902a664a30ee7f9b3d058b01cf2d093f7adf549218028d2d50ff7ffdcb313b\n7:cpu,cpuacct:/docker/b8902a664a30ee7f9b3d058b01cf2d093f7adf549218028d2d50ff7ffdcb313b\n6:perf_event:/docker/b8902a664a30ee7f9b3d058b01cf2d093f7adf549218028d2d50ff7ffdcb313b\n5:pids:/docker/b8902a664a30ee7f9b3d058b01cf2d093f7adf549218028d2d50ff7ffdcb313b\n4:misc:/docker/b8902a664a30ee7f9b3d058b01cf2d093f7adf549218028d2d50ff7ffdcb313b\n3:net_cls,net_prio:/docker/b8902a664a30ee7f9b3d058b01cf2d093f7adf549218028d2d50ff7ffdcb313b\n2:devices:/docker/b8902a664a30ee7f9b3d058b01cf2d093f7adf549218028d2d50ff7ffdcb313b\n1:name=systemd:/docker/b8902a664a30ee7f9b3d058b01cf2d093f7adf549218028d2d50ff7ffdcb313b\n",
+  "cpus": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15
+  ],
+  "quota": "1600000\n",
+  "period": "100000\n",
+  "source_files": {
+    "/home/lb/YCSB/test_scripts/inc/common.sh": "41b4ceba8b4a850f1d8388e0743524f0008d0d67c625004afcdd3cad3d38c9bc",
+    "/home/lb/YCSB/test_scripts/run.sh": "f48a6f2af2e01732378e1eb456ae3d096d5e0ba0d36d8ce852589eb80555221a",
+    "/home/lb/YCSB/test_scripts/inc/configs/dbsnappyrun.ini": "a740792c9947a59ed11059257919f7570bef63fc888f151441c863f7c5783a5e",
+    "/home/lb/YCSB/rocksdb/target/rocksdb-binding-0.18.0-SNAPSHOT.jar": "291724aed8b3af6246a87ca25e278fa362a05e9d3771936360a349db288620a4",
+    "/home/lb/.codex/worktrees/85ab/rocksdb/java/target/rocksdbjni-6.26.1-linux64.jar": "fb3d369fda8cd406246c1948a93680e9fc3a029af05ed0aa7c08606ce2fe975d"
+  }
+}

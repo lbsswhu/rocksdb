@@ -1,0 +1,7 @@
+{
+  "tested_commit": "f01cbdddc",
+  "equivalent_public_commit": "97fc7d395c2e7b363ac5c258d80c27e375ed0de2",
+  "tested_tree": "120db9bf6bb7e0553184c2be461c9df1bbf759c0",
+  "public_tree": "120db9bf6bb7e0553184c2be461c9df1bbf759c0",
+  "comparison": "git diff --exit-code FETCH_HEAD returned zero before publication"
+}

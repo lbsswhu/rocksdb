@@ -1,0 +1,493 @@
+{
+  "args": {
+    "duration": 10,
+    "threads": 32,
+    "pipelined_write": "both",
+    "repeats": 3,
+    "cpus": "0-15",
+    "root": "/data/lb/async-memtable-bench-85ab",
+    "out": "benchmark_results/async_memtable_write"
+  },
+  "commit": "f01cbdddc5a0084137fb92a5899c14da71f9f1b7\n",
+  "binary_sha256": "8a0ff8de0557d977b8b3d1818602d181e0d87f3bfe08102c4a6bb9f0a1b5ca93",
+  "common": [
+    "--num=1000000",
+    "--key_size=16",
+    "--value_size=100",
+    "--compression_type=none",
+    "--disable_wal=false",
+    "--cache_size=0",
+    "--histogram=true",
+    "--stats_interval=1000000000",
+    "--ops_between_duration_checks=100",
+    "--write_buffer_size=67108864",
+    "--max_write_buffer_number=4",
+    "--max_background_jobs=4",
+    "--statistics=false"
+  ],
+  "configs": [
+    {
+      "sync": false,
+      "concurrent": false,
+      "async_": false,
+      "workers": 0,
+      "pipeline": "false"
+    },
+    {
+      "sync": false,
+      "concurrent": false,
+      "async_": false,
+      "workers": 0,
+      "pipeline": "true"
+    },
+    {
+      "sync": false,
+      "concurrent": false,
+      "lazy": false,
+      "workers": 1,
+      "async_": true,
+      "pipeline": "false"
+    },
+    {
+      "sync": false,
+      "concurrent": false,
+      "lazy": false,
+      "workers": 1,
+      "async_": true,
+      "pipeline": "true"
+    },
+    {
+      "sync": false,
+      "concurrent": false,
+      "lazy": true,
+      "workers": 1,
+      "async_": true,
+      "pipeline": "false"
+    },
+    {
+      "sync": false,
+      "concurrent": false,
+      "lazy": true,
+      "workers": 1,
+      "async_": true,
+      "pipeline": "true"
+    },
+    {
+      "sync": false,
+      "concurrent": true,
+      "async_": false,
+      "workers": 0,
+      "pipeline": "false"
+    },
+    {
+      "sync": false,
+      "concurrent": true,
+      "async_": false,
+      "workers": 0,
+      "pipeline": "true"
+    },
+    {
+      "sync": false,
+      "concurrent": true,
+      "lazy": false,
+      "workers": 1,
+      "async_": true,
+      "pipeline": "false"
+    },
+    {
+      "sync": false,
+      "concurrent": true,
+      "lazy": false,
+      "workers": 1,
+      "async_": true,
+      "pipeline": "true"
+    },
+    {
+      "sync": false,
+      "concurrent": true,
+      "lazy": true,
+      "workers": 1,
+      "async_": true,
+      "pipeline": "false"
+    },
+    {
+      "sync": false,
+      "concurrent": true,
+      "lazy": true,
+      "workers": 1,
+      "async_": true,
+      "pipeline": "true"
+    },
+    {
+      "sync": false,
+      "concurrent": true,
+      "lazy": false,
+      "workers": 2,
+      "async_": true,
+      "pipeline": "false"
+    },
+    {
+      "sync": false,
+      "concurrent": true,
+      "lazy": false,
+      "workers": 2,
+      "async_": true,
+      "pipeline": "true"
+    },
+    {
+      "sync": false,
+      "concurrent": true,
+      "lazy": true,
+      "workers": 2,
+      "async_": true,
+      "pipeline": "false"
+    },
+    {
+      "sync": false,
+      "concurrent": true,
+      "lazy": true,
+      "workers": 2,
+      "async_": true,
+      "pipeline": "true"
+    },
+    {
+      "sync": false,
+      "concurrent": true,
+      "lazy": false,
+      "workers": 4,
+      "async_": true,
+      "pipeline": "false"
+    },
+    {
+      "sync": false,
+      "concurrent": true,
+      "lazy": false,
+      "workers": 4,
+      "async_": true,
+      "pipeline": "true"
+    },
+    {
+      "sync": false,
+      "concurrent": true,
+      "lazy": true,
+      "workers": 4,
+      "async_": true,
+      "pipeline": "false"
+    },
+    {
+      "sync": false,
+      "concurrent": true,
+      "lazy": true,
+      "workers": 4,
+      "async_": true,
+      "pipeline": "true"
+    },
+    {
+      "sync": false,
+      "concurrent": true,
+      "lazy": false,
+      "workers": 8,
+      "async_": true,
+      "pipeline": "false"
+    },
+    {
+      "sync": false,
+      "concurrent": true,
+      "lazy": false,
+      "workers": 8,
+      "async_": true,
+      "pipeline": "true"
+    },
+    {
+      "sync": false,
+      "concurrent": true,
+      "lazy": true,
+      "workers": 8,
+      "async_": true,
+      "pipeline": "false"
+    },
+    {
+      "sync": false,
+      "concurrent": true,
+      "lazy": true,
+      "workers": 8,
+      "async_": true,
+      "pipeline": "true"
+    },
+    {
+      "sync": false,
+      "concurrent": true,
+      "lazy": false,
+      "workers": 16,
+      "async_": true,
+      "pipeline": "false"
+    },
+    {
+      "sync": false,
+      "concurrent": true,
+      "lazy": false,
+      "workers": 16,
+      "async_": true,
+      "pipeline": "true"
+    },
+    {
+      "sync": false,
+      "concurrent": true,
+      "lazy": true,
+      "workers": 16,
+      "async_": true,
+      "pipeline": "false"
+    },
+    {
+      "sync": false,
+      "concurrent": true,
+      "lazy": true,
+      "workers": 16,
+      "async_": true,
+      "pipeline": "true"
+    },
+    {
+      "sync": true,
+      "concurrent": false,
+      "async_": false,
+      "workers": 0,
+      "pipeline": "false"
+    },
+    {
+      "sync": true,
+      "concurrent": false,
+      "async_": false,
+      "workers": 0,
+      "pipeline": "true"
+    },
+    {
+      "sync": true,
+      "concurrent": false,
+      "lazy": false,
+      "workers": 1,
+      "async_": true,
+      "pipeline": "false"
+    },
+    {
+      "sync": true,
+      "concurrent": false,
+      "lazy": false,
+      "workers": 1,
+      "async_": true,
+      "pipeline": "true"
+    },
+    {
+      "sync": true,
+      "concurrent": false,
+      "lazy": true,
+      "workers": 1,
+      "async_": true,
+      "pipeline": "false"
+    },
+    {
+      "sync": true,
+      "concurrent": false,
+      "lazy": true,
+      "workers": 1,
+      "async_": true,
+      "pipeline": "true"
+    },
+    {
+      "sync": true,
+      "concurrent": true,
+      "async_": false,
+      "workers": 0,
+      "pipeline": "false"
+    },
+    {
+      "sync": true,
+      "concurrent": true,
+      "async_": false,
+      "workers": 0,
+      "pipeline": "true"
+    },
+    {
+      "sync": true,
+      "concurrent": true,
+      "lazy": false,
+      "workers": 1,
+      "async_": true,
+      "pipeline": "false"
+    },
+    {
+      "sync": true,
+      "concurrent": true,
+      "lazy": false,
+      "workers": 1,
+      "async_": true,
+      "pipeline": "true"
+    },
+    {
+      "sync": true,
+      "concurrent": true,
+      "lazy": true,
+      "workers": 1,
+      "async_": true,
+      "pipeline": "false"
+    },
+    {
+      "sync": true,
+      "concurrent": true,
+      "lazy": true,
+      "workers": 1,
+      "async_": true,
+      "pipeline": "true"
+    },
+    {
+      "sync": true,
+      "concurrent": true,
+      "lazy": false,
+      "workers": 2,
+      "async_": true,
+      "pipeline": "false"
+    },
+    {
+      "sync": true,
+      "concurrent": true,
+      "lazy": false,
+      "workers": 2,
+      "async_": true,
+      "pipeline": "true"
+    },
+    {
+      "sync": true,
+      "concurrent": true,
+      "lazy": true,
+      "workers": 2,
+      "async_": true,
+      "pipeline": "false"
+    },
+    {
+      "sync": true,
+      "concurrent": true,
+      "lazy": true,
+      "workers": 2,
+      "async_": true,
+      "pipeline": "true"
+    },
+    {
+      "sync": true,
+      "concurrent": true,
+      "lazy": false,
+      "workers": 4,
+      "async_": true,
+      "pipeline": "false"
+    },
+    {
+      "sync": true,
+      "concurrent": true,
+      "lazy": false,
+      "workers": 4,
+      "async_": true,
+      "pipeline": "true"
+    },
+    {
+      "sync": true,
+      "concurrent": true,
+      "lazy": true,
+      "workers": 4,
+      "async_": true,
+      "pipeline": "false"
+    },
+    {
+      "sync": true,
+      "concurrent": true,
+      "lazy": true,
+      "workers": 4,
+      "async_": true,
+      "pipeline": "true"
+    },
+    {
+      "sync": true,
+      "concurrent": true,
+      "lazy": false,
+      "workers": 8,
+      "async_": true,
+      "pipeline": "false"
+    },
+    {
+      "sync": true,
+      "concurrent": true,
+      "lazy": false,
+      "workers": 8,
+      "async_": true,
+      "pipeline": "true"
+    },
+    {
+      "sync": true,
+      "concurrent": true,
+      "lazy": true,
+      "workers": 8,
+      "async_": true,
+      "pipeline": "false"
+    },
+    {
+      "sync": true,
+      "concurrent": true,
+      "lazy": true,
+      "workers": 8,
+      "async_": true,
+      "pipeline": "true"
+    },
+    {
+      "sync": true,
+      "concurrent": true,
+      "lazy": false,
+      "workers": 16,
+      "async_": true,
+      "pipeline": "false"
+    },
+    {
+      "sync": true,
+      "concurrent": true,
+      "lazy": false,
+      "workers": 16,
+      "async_": true,
+      "pipeline": "true"
+    },
+    {
+      "sync": true,
+      "concurrent": true,
+      "lazy": true,
+      "workers": 16,
+      "async_": true,
+      "pipeline": "false"
+    },
+    {
+      "sync": true,
+      "concurrent": true,
+      "lazy": true,
+      "workers": 16,
+      "async_": true,
+      "pipeline": "true"
+    }
+  ],
+  "runtime": {
+    "cgroup": "13:hugetlb:/docker/b8902a664a30ee7f9b3d058b01cf2d093f7adf549218028d2d50ff7ffdcb313b\n12:freezer:/docker/b8902a664a30ee7f9b3d058b01cf2d093f7adf549218028d2d50ff7ffdcb313b\n11:cpuset:/docker/b8902a664a30ee7f9b3d058b01cf2d093f7adf549218028d2d50ff7ffdcb313b\n10:memory:/docker/b8902a664a30ee7f9b3d058b01cf2d093f7adf549218028d2d50ff7ffdcb313b\n9:blkio:/docker/b8902a664a30ee7f9b3d058b01cf2d093f7adf549218028d2d50ff7ffdcb313b\n8:rdma:/docker/b8902a664a30ee7f9b3d058b01cf2d093f7adf549218028d2d50ff7ffdcb313b\n7:cpu,cpuacct:/docker/b8902a664a30ee7f9b3d058b01cf2d093f7adf549218028d2d50ff7ffdcb313b\n6:perf_event:/docker/b8902a664a30ee7f9b3d058b01cf2d093f7adf549218028d2d50ff7ffdcb313b\n5:pids:/docker/b8902a664a30ee7f9b3d058b01cf2d093f7adf549218028d2d50ff7ffdcb313b\n4:misc:/docker/b8902a664a30ee7f9b3d058b01cf2d093f7adf549218028d2d50ff7ffdcb313b\n3:net_cls,net_prio:/docker/b8902a664a30ee7f9b3d058b01cf2d093f7adf549218028d2d50ff7ffdcb313b\n2:devices:/docker/b8902a664a30ee7f9b3d058b01cf2d093f7adf549218028d2d50ff7ffdcb313b\n1:name=systemd:/docker/b8902a664a30ee7f9b3d058b01cf2d093f7adf549218028d2d50ff7ffdcb313b\n",
+    "affinity": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15
+    ],
+    "cpu_quota": "1600000\n",
+    "cpu_period": "100000\n"
+  }
+}

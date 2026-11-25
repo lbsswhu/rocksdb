@@ -1,0 +1,10 @@
+{
+  "status": "passed",
+  "reason": "YCSB launcher rebuilds binding jar under root; archive manifest Built-By differs from the initial host build.",
+  "classes_recompiled_from_saved_pretest_source_match": true,
+  "class_sha256": {
+    "site/ycsb/db/rocksdb/RocksDBClient.class": "a0fc334904a151d07a3907942d85a88638148f8d3b83b98690bfa7373d7505b7",
+    "site/ycsb/db/rocksdb/RocksDBClient$1.class": "363f862a81c700991451d8e08c900d4b9cf12653a5290f498f827963361d75ee",
+    "site/ycsb/db/rocksdb/RocksDBClient$ColumnFamily.class": "89ef4fc549fe3f820a06f5710f805e40e06a3cbc88b37a49c1677b69a8191ffc"
+  }
+}

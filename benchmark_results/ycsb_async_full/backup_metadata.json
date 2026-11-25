@@ -1,0 +1,14 @@
+{
+  "/data/lb/workload_backup_data/CURRENT": {
+    "size": 16,
+    "sha256": "547c81603d95adefdc32914ad4b2bbdbb1db35b2a2f52775745b9cf850eab878"
+  },
+  "/data/lb/workload_backup_data/MANIFEST-026281": {
+    "size": 117488,
+    "sha256": "14bb884b0fd0ed1c14a9926b9c526f806cee2498bb7eafe179a29576243d2ff1"
+  },
+  "/data/lb/workload_backup_data/CF_NAMES": {
+    "size": 16,
+    "sha256": "5f34a8e9237717c98448ed9d815f699932670e40320e19749dfffae7f8ef872a"
+  }
+}

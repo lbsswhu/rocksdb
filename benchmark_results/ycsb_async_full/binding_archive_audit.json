@@ -1,0 +1,12 @@
+{
+  "status": "passed",
+  "classes_from_pretest_source_match": true,
+  "class_sha256": {
+    "site/ycsb/db/rocksdb/RocksDBClient.class": "a0fc334904a151d07a3907942d85a88638148f8d3b83b98690bfa7373d7505b7",
+    "site/ycsb/db/rocksdb/RocksDBClient$1.class": "363f862a81c700991451d8e08c900d4b9cf12653a5290f498f827963361d75ee",
+    "site/ycsb/db/rocksdb/RocksDBClient$ColumnFamily.class": "89ef4fc549fe3f820a06f5710f805e40e06a3cbc88b37a49c1677b69a8191ffc"
+  },
+  "initial_archive_sha256": "364b68af8fd780b3acf766b856c10cd3c72a7ed5474b0384253a13ff03e4b7ee",
+  "final_archive_sha256": "93c24cbd99ecb5e4ed84247f3f96c3f30425745560c76393753406f86a5b706e",
+  "note": "The YCSB launcher recompiles and repackages on each invocation. Archive timestamps may change; class content was independently verified."
+}
