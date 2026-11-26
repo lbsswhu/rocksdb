@@ -1,0 +1,36 @@
+{
+  "started_at": "2026-11-25T17:35:04+0800",
+  "cgroup_before": {
+    "memory/memory.limit_in_bytes": "34359738368\n",
+    "memory/memory.memsw.limit_in_bytes": "34359738368\n",
+    "memory/memory.failcnt": "0\n",
+    "memory/memory.oom_control": "oom_kill_disable 0\nunder_oom 0\noom_kill 0\n",
+    "memory/memory.stat": "cache 33697923072\nrss 10297344\nrss_huge 0\nshmem 0\nmapped_file 0\ndirty 171159552\nwriteback 0\nworkingset_refault_anon 0\nworkingset_refault_file 10426617637\nswap 0\nswapcached 0\npgpgin 11015632036\npgpgout 11010058806\npgfault 414303983\npgmajfault 1091\ninactive_anon 10203136\nactive_anon 8192\ninactive_file 7985430528\nactive_file 25846710272\nunevictable 0\nhierarchical_memory_limit 34359738368\nhierarchical_memsw_limit 34359738368\ntotal_cache 33697923072\ntotal_rss 10297344\ntotal_rss_huge 0\ntotal_shmem 0\ntotal_mapped_file 0\ntotal_dirty 171159552\ntotal_writeback 0\ntotal_workingset_refault_anon 0\ntotal_workingset_refault_file 10426617637\ntotal_swap 0\ntotal_swapcached 0\ntotal_pgpgin 11015632036\ntotal_pgpgout 11010058806\ntotal_pgfault 414303983\ntotal_pgmajfault 1091\ntotal_inactive_anon 10203136\ntotal_active_anon 8192\ntotal_inactive_file 7985430528\ntotal_active_file 25846710272\ntotal_unevictable 0\n",
+    "cpu/cpu.cfs_quota_us": "1600000\n",
+    "cpu/cpu.cfs_period_us": "100000\n",
+    "cpuset/cpuset.cpus": "0-15\n"
+  },
+  "jar": {
+    "commit": "0a47210279850a86ee97e8fc1dae846d4a110db3",
+    "runtime_jar": "/home/lb/ycsb-zero-range-20261125/runtime/lib/rocksdbjni-6.26.1-linux64.jar",
+    "jar_sha256": "8e25505e855ae3a07d9bdfd2256d8984c9df9bf115212635285783c9e7e95e63",
+    "native_entry": "librocksdbjni-linux-aarch64.so",
+    "native_sha256": "3fea1133ce8e972e1f5d53125e623d15203c72d00943d0feebf05fd2c128bbe0",
+    "java_class_major": 52,
+    "make_flags": "PORTABLE=1 DEBUG_LEVEL=0 make rocksdbjava -j12 DISABLE_WARNING_AS_ERROR=1 DISABLE_JEMALLOC=1",
+    "native_loading": "java.library.path points to empty directory; jar extraction; mapped native SHA256 verified"
+  },
+  "method": "A1/B same target jar; original common.sh functions; independent seed per series; A-F sequential; 120s warmup and each workload; 3 measured rounds; no drop_caches",
+  "last_completed_series": "/home/lb/ycsb-zero-range-20261125/r3-B",
+  "cgroup_after": {
+    "memory/memory.limit_in_bytes": "34359738368\n",
+    "memory/memory.memsw.limit_in_bytes": "34359738368\n",
+    "memory/memory.failcnt": "0\n",
+    "memory/memory.oom_control": "oom_kill_disable 0\nunder_oom 0\noom_kill 0\n",
+    "memory/memory.stat": "cache 28092137472\nrss 11386880\nrss_huge 2097152\nshmem 0\nmapped_file 0\ndirty 2453504\nwriteback 0\nworkingset_refault_anon 0\nworkingset_refault_file 12216306139\nswap 0\nswapcached 0\npgpgin 12768883131\npgpgout 12762669096\npgfault 504920439\npgmajfault 2015\ninactive_anon 11378688\nactive_anon 8192\ninactive_file 1607049216\nactive_file 26619281408\nunevictable 0\nhierarchical_memory_limit 34359738368\nhierarchical_memsw_limit 34359738368\ntotal_cache 28092137472\ntotal_rss 11386880\ntotal_rss_huge 2097152\ntotal_shmem 0\ntotal_mapped_file 0\ntotal_dirty 2453504\ntotal_writeback 0\ntotal_workingset_refault_anon 0\ntotal_workingset_refault_file 12216306139\ntotal_swap 0\ntotal_swapcached 0\ntotal_pgpgin 12768883131\ntotal_pgpgout 12762669096\ntotal_pgfault 504920439\ntotal_pgmajfault 2015\ntotal_inactive_anon 11378688\ntotal_active_anon 8192\ntotal_inactive_file 1607049216\ntotal_active_file 26619281408\ntotal_unevictable 0\n",
+    "cpu/cpu.cfs_quota_us": "1600000\n",
+    "cpu/cpu.cfs_period_us": "100000\n",
+    "cpuset/cpuset.cpus": "0-15\n"
+  },
+  "completed_at": "2026-11-25T19:03:50+0800"
+}

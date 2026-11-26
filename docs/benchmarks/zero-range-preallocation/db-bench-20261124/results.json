@@ -1,0 +1,3266 @@
+[
+  {
+    "workload": "write",
+    "sync": 1,
+    "concurrent": 0,
+    "round": 0,
+    "group": "A0",
+    "ops_sec": 84299.0,
+    "operations": 169684,
+    "process_seconds": 2.667986596003175,
+    "end_to_end_ops_sec": 63600.01967558539,
+    "histograms": {
+      "write": {
+        "count": 169684,
+        "p50_us": 205.01,
+        "p99_us": 249.62,
+        "p999_us": 481.55
+      }
+    },
+    "scanned_keys": 148040,
+    "counters": {
+      "zero.range.preallocation.calls": null,
+      "zero.range.preallocation.wal.calls": null,
+      "zero.range.preallocation.flush.calls": null,
+      "zero.range.preallocation.compaction.calls": null,
+      "zero.range.preallocation.fallbacks": null,
+      "zero.range.preallocation.failures": null,
+      "preallocation.truncate.failures": null,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/write-sync1-cmw0/r0-A0"
+  },
+  {
+    "workload": "write",
+    "sync": 1,
+    "concurrent": 0,
+    "round": 0,
+    "group": "A1",
+    "ops_sec": 84272.0,
+    "operations": 169784,
+    "process_seconds": 2.6676634249743074,
+    "end_to_end_ops_sec": 63645.21041541633,
+    "histograms": {
+      "write": {
+        "count": 169784,
+        "p50_us": 205.05,
+        "p99_us": 249.74,
+        "p999_us": 374.31
+      }
+    },
+    "scanned_keys": 148127,
+    "counters": {
+      "zero.range.preallocation.calls": 0,
+      "zero.range.preallocation.wal.calls": 0,
+      "zero.range.preallocation.flush.calls": 0,
+      "zero.range.preallocation.compaction.calls": 0,
+      "zero.range.preallocation.fallbacks": 0,
+      "zero.range.preallocation.failures": 0,
+      "preallocation.truncate.failures": 0,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/write-sync1-cmw0/r0-A1"
+  },
+  {
+    "workload": "write",
+    "sync": 1,
+    "concurrent": 0,
+    "round": 0,
+    "group": "B",
+    "ops_sec": 94523.0,
+    "operations": 190084,
+    "process_seconds": 2.717734549078159,
+    "end_to_end_ops_sec": 69942.077332194,
+    "histograms": {
+      "write": {
+        "count": 190084,
+        "p50_us": 178.41,
+        "p99_us": 249.11,
+        "p999_us": 366.16
+      }
+    },
+    "scanned_keys": 163196,
+    "counters": {
+      "zero.range.preallocation.calls": 11,
+      "zero.range.preallocation.wal.calls": 4,
+      "zero.range.preallocation.flush.calls": 4,
+      "zero.range.preallocation.compaction.calls": 3,
+      "zero.range.preallocation.fallbacks": 0,
+      "zero.range.preallocation.failures": 0,
+      "preallocation.truncate.failures": 0,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/write-sync1-cmw0/r0-B"
+  },
+  {
+    "workload": "write",
+    "sync": 1,
+    "concurrent": 0,
+    "round": 1,
+    "group": "A1",
+    "ops_sec": 84355.0,
+    "operations": 422984,
+    "process_seconds": 6.273370462004095,
+    "end_to_end_ops_sec": 67425.31826581675,
+    "histograms": {
+      "write": {
+        "count": 422984,
+        "p50_us": 203.66,
+        "p99_us": 249.73,
+        "p999_us": 429.11
+      }
+    },
+    "scanned_keys": 303774,
+    "counters": {
+      "zero.range.preallocation.calls": 0,
+      "zero.range.preallocation.wal.calls": 0,
+      "zero.range.preallocation.flush.calls": 0,
+      "zero.range.preallocation.compaction.calls": 0,
+      "zero.range.preallocation.fallbacks": 0,
+      "zero.range.preallocation.failures": 0,
+      "preallocation.truncate.failures": 0,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/write-sync1-cmw0/r1-A1"
+  },
+  {
+    "workload": "write",
+    "sync": 1,
+    "concurrent": 0,
+    "round": 1,
+    "group": "B",
+    "ops_sec": 102511.0,
+    "operations": 513384,
+    "process_seconds": 7.474705370026641,
+    "end_to_end_ops_sec": 68682.84093961155,
+    "histograms": {
+      "write": {
+        "count": 513384,
+        "p50_us": 151.24,
+        "p99_us": 248.28,
+        "p999_us": 433.26
+      }
+    },
+    "scanned_keys": 345338,
+    "counters": {
+      "zero.range.preallocation.calls": 34,
+      "zero.range.preallocation.wal.calls": 9,
+      "zero.range.preallocation.flush.calls": 9,
+      "zero.range.preallocation.compaction.calls": 16,
+      "zero.range.preallocation.fallbacks": 0,
+      "zero.range.preallocation.failures": 0,
+      "preallocation.truncate.failures": 0,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/write-sync1-cmw0/r1-B"
+  },
+  {
+    "workload": "write",
+    "sync": 1,
+    "concurrent": 0,
+    "round": 1,
+    "group": "A0",
+    "ops_sec": 95876.0,
+    "operations": 480584,
+    "process_seconds": 6.3734832789050415,
+    "end_to_end_ops_sec": 75403.66530663651,
+    "histograms": {
+      "write": {
+        "count": 480584,
+        "p50_us": 162.14,
+        "p99_us": 248.79,
+        "p999_us": 377.97
+      }
+    },
+    "scanned_keys": 330875,
+    "counters": {
+      "zero.range.preallocation.calls": null,
+      "zero.range.preallocation.wal.calls": null,
+      "zero.range.preallocation.flush.calls": null,
+      "zero.range.preallocation.compaction.calls": null,
+      "zero.range.preallocation.fallbacks": null,
+      "zero.range.preallocation.failures": null,
+      "preallocation.truncate.failures": null,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/write-sync1-cmw0/r1-A0"
+  },
+  {
+    "workload": "write",
+    "sync": 1,
+    "concurrent": 0,
+    "round": 2,
+    "group": "B",
+    "ops_sec": 88222.0,
+    "operations": 442184,
+    "process_seconds": 6.273042841930874,
+    "end_to_end_ops_sec": 70489.5552512907,
+    "histograms": {
+      "write": {
+        "count": 442184,
+        "p50_us": 180.24,
+        "p99_us": 356.57,
+        "p999_us": 473.04
+      }
+    },
+    "scanned_keys": 313099,
+    "counters": {
+      "zero.range.preallocation.calls": 25,
+      "zero.range.preallocation.wal.calls": 8,
+      "zero.range.preallocation.flush.calls": 8,
+      "zero.range.preallocation.compaction.calls": 9,
+      "zero.range.preallocation.fallbacks": 0,
+      "zero.range.preallocation.failures": 0,
+      "preallocation.truncate.failures": 0,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/write-sync1-cmw0/r2-B"
+  },
+  {
+    "workload": "write",
+    "sync": 1,
+    "concurrent": 0,
+    "round": 2,
+    "group": "A0",
+    "ops_sec": 90799.0,
+    "operations": 454984,
+    "process_seconds": 6.273130071000196,
+    "end_to_end_ops_sec": 72529.0237649188,
+    "histograms": {
+      "write": {
+        "count": 454984,
+        "p50_us": 188.98,
+        "p99_us": 249.69,
+        "p999_us": 435.53
+      }
+    },
+    "scanned_keys": 319098,
+    "counters": {
+      "zero.range.preallocation.calls": null,
+      "zero.range.preallocation.wal.calls": null,
+      "zero.range.preallocation.flush.calls": null,
+      "zero.range.preallocation.compaction.calls": null,
+      "zero.range.preallocation.fallbacks": null,
+      "zero.range.preallocation.failures": null,
+      "preallocation.truncate.failures": null,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/write-sync1-cmw0/r2-A0"
+  },
+  {
+    "workload": "write",
+    "sync": 1,
+    "concurrent": 0,
+    "round": 2,
+    "group": "A1",
+    "ops_sec": 89933.0,
+    "operations": 451384,
+    "process_seconds": 6.322953504975885,
+    "end_to_end_ops_sec": 71388.15739270908,
+    "histograms": {
+      "write": {
+        "count": 451384,
+        "p50_us": 186.72,
+        "p99_us": 319.82,
+        "p999_us": 383.83
+      }
+    },
+    "scanned_keys": 317424,
+    "counters": {
+      "zero.range.preallocation.calls": 0,
+      "zero.range.preallocation.wal.calls": 0,
+      "zero.range.preallocation.flush.calls": 0,
+      "zero.range.preallocation.compaction.calls": 0,
+      "zero.range.preallocation.fallbacks": 0,
+      "zero.range.preallocation.failures": 0,
+      "preallocation.truncate.failures": 0,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/write-sync1-cmw0/r2-A1"
+  },
+  {
+    "workload": "write",
+    "sync": 1,
+    "concurrent": 0,
+    "round": 3,
+    "group": "A0",
+    "ops_sec": 77250.0,
+    "operations": 387484,
+    "process_seconds": 6.122631581034511,
+    "end_to_end_ops_sec": 63287.16579979629,
+    "histograms": {
+      "write": {
+        "count": 387484,
+        "p50_us": 205.57,
+        "p99_us": 372.48,
+        "p999_us": 542.51
+      }
+    },
+    "scanned_keys": 285764,
+    "counters": {
+      "zero.range.preallocation.calls": null,
+      "zero.range.preallocation.wal.calls": null,
+      "zero.range.preallocation.flush.calls": null,
+      "zero.range.preallocation.compaction.calls": null,
+      "zero.range.preallocation.fallbacks": null,
+      "zero.range.preallocation.failures": null,
+      "preallocation.truncate.failures": null,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/write-sync1-cmw0/r3-A0"
+  },
+  {
+    "workload": "write",
+    "sync": 1,
+    "concurrent": 0,
+    "round": 3,
+    "group": "A1",
+    "ops_sec": 78975.0,
+    "operations": 396084,
+    "process_seconds": 6.222946268040687,
+    "end_to_end_ops_sec": 63648.95066412139,
+    "histograms": {
+      "write": {
+        "count": 396084,
+        "p50_us": 202.4,
+        "p99_us": 368.91,
+        "p999_us": 459.54
+      }
+    },
+    "scanned_keys": 290167,
+    "counters": {
+      "zero.range.preallocation.calls": 0,
+      "zero.range.preallocation.wal.calls": 0,
+      "zero.range.preallocation.flush.calls": 0,
+      "zero.range.preallocation.compaction.calls": 0,
+      "zero.range.preallocation.fallbacks": 0,
+      "zero.range.preallocation.failures": 0,
+      "preallocation.truncate.failures": 0,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/write-sync1-cmw0/r3-A1"
+  },
+  {
+    "workload": "write",
+    "sync": 1,
+    "concurrent": 0,
+    "round": 3,
+    "group": "B",
+    "ops_sec": 101251.0,
+    "operations": 507684,
+    "process_seconds": 7.424367896048352,
+    "end_to_end_ops_sec": 68380.77087615994,
+    "histograms": {
+      "write": {
+        "count": 507684,
+        "p50_us": 152.87,
+        "p99_us": 251.47,
+        "p999_us": 377.58
+      }
+    },
+    "scanned_keys": 342884,
+    "counters": {
+      "zero.range.preallocation.calls": 34,
+      "zero.range.preallocation.wal.calls": 9,
+      "zero.range.preallocation.flush.calls": 9,
+      "zero.range.preallocation.compaction.calls": 16,
+      "zero.range.preallocation.fallbacks": 0,
+      "zero.range.preallocation.failures": 0,
+      "preallocation.truncate.failures": 0,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/write-sync1-cmw0/r3-B"
+  },
+  {
+    "workload": "mixed",
+    "sync": 0,
+    "concurrent": 1,
+    "round": 0,
+    "group": "A0",
+    "ops_sec": 392341.0,
+    "operations": 788384,
+    "process_seconds": 5.53149734204635,
+    "end_to_end_ops_sec": 142526.3271858215,
+    "histograms": {
+      "read": {
+        "count": 394200,
+        "p50_us": 25.61,
+        "p99_us": 99.76,
+        "p999_us": 109.8
+      },
+      "write": {
+        "count": 394184,
+        "p50_us": 37.76,
+        "p99_us": 454.67,
+        "p999_us": 2466.28
+      }
+    },
+    "scanned_keys": 600000,
+    "counters": {
+      "zero.range.preallocation.calls": null,
+      "zero.range.preallocation.wal.calls": null,
+      "zero.range.preallocation.flush.calls": null,
+      "zero.range.preallocation.compaction.calls": null,
+      "zero.range.preallocation.fallbacks": null,
+      "zero.range.preallocation.failures": null,
+      "preallocation.truncate.failures": null,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/mixed-sync0-cmw1/r0-A0"
+  },
+  {
+    "workload": "mixed",
+    "sync": 0,
+    "concurrent": 1,
+    "round": 0,
+    "group": "A1",
+    "ops_sec": 377519.0,
+    "operations": 758084,
+    "process_seconds": 5.57916813401971,
+    "end_to_end_ops_sec": 135877.60429327865,
+    "histograms": {
+      "read": {
+        "count": 379050,
+        "p50_us": 25.24,
+        "p99_us": 95.31,
+        "p999_us": 109.36
+      },
+      "write": {
+        "count": 379034,
+        "p50_us": 41.17,
+        "p99_us": 428.5,
+        "p999_us": 2403.2
+      }
+    },
+    "scanned_keys": 600000,
+    "counters": {
+      "zero.range.preallocation.calls": 0,
+      "zero.range.preallocation.wal.calls": 0,
+      "zero.range.preallocation.flush.calls": 0,
+      "zero.range.preallocation.compaction.calls": 0,
+      "zero.range.preallocation.fallbacks": 0,
+      "zero.range.preallocation.failures": 0,
+      "preallocation.truncate.failures": 0,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/mixed-sync0-cmw1/r0-A1"
+  },
+  {
+    "workload": "mixed",
+    "sync": 0,
+    "concurrent": 1,
+    "round": 0,
+    "group": "B",
+    "ops_sec": 388537.0,
+    "operations": 780584,
+    "process_seconds": 5.831271494971588,
+    "end_to_end_ops_sec": 133861.7144945338,
+    "histograms": {
+      "read": {
+        "count": 390300,
+        "p50_us": 25.52,
+        "p99_us": 97.92,
+        "p999_us": 109.86
+      },
+      "write": {
+        "count": 390284,
+        "p50_us": 38.8,
+        "p99_us": 547.24,
+        "p999_us": 2382.12
+      }
+    },
+    "scanned_keys": 600000,
+    "counters": {
+      "zero.range.preallocation.calls": 33,
+      "zero.range.preallocation.wal.calls": 7,
+      "zero.range.preallocation.flush.calls": 7,
+      "zero.range.preallocation.compaction.calls": 19,
+      "zero.range.preallocation.fallbacks": 0,
+      "zero.range.preallocation.failures": 0,
+      "preallocation.truncate.failures": 0,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/mixed-sync0-cmw1/r0-B"
+  },
+  {
+    "workload": "mixed",
+    "sync": 0,
+    "concurrent": 1,
+    "round": 1,
+    "group": "A1",
+    "ops_sec": 325221.0,
+    "operations": 1629884,
+    "process_seconds": 9.408447201014496,
+    "end_to_end_ops_sec": 173236.2381567335,
+    "histograms": {
+      "read": {
+        "count": 814950,
+        "p50_us": 37.82,
+        "p99_us": 127.21,
+        "p999_us": 168.66
+      },
+      "write": {
+        "count": 814934,
+        "p50_us": 37.73,
+        "p99_us": 798.78,
+        "p999_us": 2812.91
+      }
+    },
+    "scanned_keys": 600000,
+    "counters": {
+      "zero.range.preallocation.calls": 0,
+      "zero.range.preallocation.wal.calls": 0,
+      "zero.range.preallocation.flush.calls": 0,
+      "zero.range.preallocation.compaction.calls": 0,
+      "zero.range.preallocation.fallbacks": 0,
+      "zero.range.preallocation.failures": 0,
+      "preallocation.truncate.failures": 0,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/mixed-sync0-cmw1/r1-A1"
+  },
+  {
+    "workload": "mixed",
+    "sync": 0,
+    "concurrent": 1,
+    "round": 1,
+    "group": "B",
+    "ops_sec": 328357.0,
+    "operations": 1644884,
+    "process_seconds": 9.404698088997975,
+    "end_to_end_ops_sec": 174900.24500884901,
+    "histograms": {
+      "read": {
+        "count": 822450,
+        "p50_us": 37.92,
+        "p99_us": 129.8,
+        "p999_us": 169.58
+      },
+      "write": {
+        "count": 822434,
+        "p50_us": 37.49,
+        "p99_us": 721.76,
+        "p999_us": 2764.93
+      }
+    },
+    "scanned_keys": 600000,
+    "counters": {
+      "zero.range.preallocation.calls": 57,
+      "zero.range.preallocation.wal.calls": 14,
+      "zero.range.preallocation.flush.calls": 14,
+      "zero.range.preallocation.compaction.calls": 29,
+      "zero.range.preallocation.fallbacks": 0,
+      "zero.range.preallocation.failures": 0,
+      "preallocation.truncate.failures": 0,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/mixed-sync0-cmw1/r1-B"
+  },
+  {
+    "workload": "mixed",
+    "sync": 0,
+    "concurrent": 1,
+    "round": 1,
+    "group": "A0",
+    "ops_sec": 329564.0,
+    "operations": 1650584,
+    "process_seconds": 9.46485604904592,
+    "end_to_end_ops_sec": 174390.8191996626,
+    "histograms": {
+      "read": {
+        "count": 825300,
+        "p50_us": 37.61,
+        "p99_us": 109.86,
+        "p999_us": 167.37
+      },
+      "write": {
+        "count": 825284,
+        "p50_us": 37.69,
+        "p99_us": 790.14,
+        "p999_us": 2772.9
+      }
+    },
+    "scanned_keys": 600000,
+    "counters": {
+      "zero.range.preallocation.calls": null,
+      "zero.range.preallocation.wal.calls": null,
+      "zero.range.preallocation.flush.calls": null,
+      "zero.range.preallocation.compaction.calls": null,
+      "zero.range.preallocation.fallbacks": null,
+      "zero.range.preallocation.failures": null,
+      "preallocation.truncate.failures": null,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/mixed-sync0-cmw1/r1-A0"
+  },
+  {
+    "workload": "mixed",
+    "sync": 0,
+    "concurrent": 1,
+    "round": 2,
+    "group": "B",
+    "ops_sec": 326070.0,
+    "operations": 1633384,
+    "process_seconds": 9.368782114936039,
+    "end_to_end_ops_sec": 174343.25827644154,
+    "histograms": {
+      "read": {
+        "count": 816700,
+        "p50_us": 37.43,
+        "p99_us": 110.26,
+        "p999_us": 169.2
+      },
+      "write": {
+        "count": 816684,
+        "p50_us": 37.8,
+        "p99_us": 865.92,
+        "p999_us": 2779.75
+      }
+    },
+    "scanned_keys": 600000,
+    "counters": {
+      "zero.range.preallocation.calls": 57,
+      "zero.range.preallocation.wal.calls": 14,
+      "zero.range.preallocation.flush.calls": 14,
+      "zero.range.preallocation.compaction.calls": 29,
+      "zero.range.preallocation.fallbacks": 0,
+      "zero.range.preallocation.failures": 0,
+      "preallocation.truncate.failures": 0,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/mixed-sync0-cmw1/r2-B"
+  },
+  {
+    "workload": "mixed",
+    "sync": 0,
+    "concurrent": 1,
+    "round": 2,
+    "group": "A0",
+    "ops_sec": 332160.0,
+    "operations": 1664384,
+    "process_seconds": 10.65656789089553,
+    "end_to_end_ops_sec": 156183.8686752018,
+    "histograms": {
+      "read": {
+        "count": 832200,
+        "p50_us": 37.85,
+        "p99_us": 109.78,
+        "p999_us": 168.64
+      },
+      "write": {
+        "count": 832184,
+        "p50_us": 37.0,
+        "p99_us": 718.88,
+        "p999_us": 2757.06
+      }
+    },
+    "scanned_keys": 600000,
+    "counters": {
+      "zero.range.preallocation.calls": null,
+      "zero.range.preallocation.wal.calls": null,
+      "zero.range.preallocation.flush.calls": null,
+      "zero.range.preallocation.compaction.calls": null,
+      "zero.range.preallocation.fallbacks": null,
+      "zero.range.preallocation.failures": null,
+      "preallocation.truncate.failures": null,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/mixed-sync0-cmw1/r2-A0"
+  },
+  {
+    "workload": "mixed",
+    "sync": 0,
+    "concurrent": 1,
+    "round": 2,
+    "group": "A1",
+    "ops_sec": 332092.0,
+    "operations": 1663784,
+    "process_seconds": 9.412820295081474,
+    "end_to_end_ops_sec": 176757.22555432032,
+    "histograms": {
+      "read": {
+        "count": 831900,
+        "p50_us": 37.94,
+        "p99_us": 118.05,
+        "p999_us": 168.72
+      },
+      "write": {
+        "count": 831884,
+        "p50_us": 37.37,
+        "p99_us": 755.03,
+        "p999_us": 2739.41
+      }
+    },
+    "scanned_keys": 600000,
+    "counters": {
+      "zero.range.preallocation.calls": 0,
+      "zero.range.preallocation.wal.calls": 0,
+      "zero.range.preallocation.flush.calls": 0,
+      "zero.range.preallocation.compaction.calls": 0,
+      "zero.range.preallocation.fallbacks": 0,
+      "zero.range.preallocation.failures": 0,
+      "preallocation.truncate.failures": 0,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/mixed-sync0-cmw1/r2-A1"
+  },
+  {
+    "workload": "mixed",
+    "sync": 0,
+    "concurrent": 1,
+    "round": 3,
+    "group": "A0",
+    "ops_sec": 329749.0,
+    "operations": 1651284,
+    "process_seconds": 9.350122182047926,
+    "end_to_end_ops_sec": 176605.60662730556,
+    "histograms": {
+      "read": {
+        "count": 825650,
+        "p50_us": 37.54,
+        "p99_us": 110.23,
+        "p999_us": 168.39
+      },
+      "write": {
+        "count": 825634,
+        "p50_us": 37.76,
+        "p99_us": 748.09,
+        "p999_us": 2792.64
+      }
+    },
+    "scanned_keys": 600000,
+    "counters": {
+      "zero.range.preallocation.calls": null,
+      "zero.range.preallocation.wal.calls": null,
+      "zero.range.preallocation.flush.calls": null,
+      "zero.range.preallocation.compaction.calls": null,
+      "zero.range.preallocation.fallbacks": null,
+      "zero.range.preallocation.failures": null,
+      "preallocation.truncate.failures": null,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/mixed-sync0-cmw1/r3-A0"
+  },
+  {
+    "workload": "mixed",
+    "sync": 0,
+    "concurrent": 1,
+    "round": 3,
+    "group": "A1",
+    "ops_sec": 331016.0,
+    "operations": 1658884,
+    "process_seconds": 11.21124252397567,
+    "end_to_end_ops_sec": 147966.11494688597,
+    "histograms": {
+      "read": {
+        "count": 829450,
+        "p50_us": 37.84,
+        "p99_us": 111.08,
+        "p999_us": 167.74
+      },
+      "write": {
+        "count": 829434,
+        "p50_us": 36.94,
+        "p99_us": 768.52,
+        "p999_us": 2767.87
+      }
+    },
+    "scanned_keys": 600000,
+    "counters": {
+      "zero.range.preallocation.calls": 0,
+      "zero.range.preallocation.wal.calls": 0,
+      "zero.range.preallocation.flush.calls": 0,
+      "zero.range.preallocation.compaction.calls": 0,
+      "zero.range.preallocation.fallbacks": 0,
+      "zero.range.preallocation.failures": 0,
+      "preallocation.truncate.failures": 0,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/mixed-sync0-cmw1/r3-A1"
+  },
+  {
+    "workload": "mixed",
+    "sync": 0,
+    "concurrent": 1,
+    "round": 3,
+    "group": "B",
+    "ops_sec": 340306.0,
+    "operations": 1704384,
+    "process_seconds": 9.555019240011461,
+    "end_to_end_ops_sec": 178375.77896891348,
+    "histograms": {
+      "read": {
+        "count": 852200,
+        "p50_us": 39.1,
+        "p99_us": 142.32,
+        "p999_us": 169.36
+      },
+      "write": {
+        "count": 852184,
+        "p50_us": 36.11,
+        "p99_us": 584.31,
+        "p999_us": 2599.57
+      }
+    },
+    "scanned_keys": 600000,
+    "counters": {
+      "zero.range.preallocation.calls": 57,
+      "zero.range.preallocation.wal.calls": 14,
+      "zero.range.preallocation.flush.calls": 14,
+      "zero.range.preallocation.compaction.calls": 29,
+      "zero.range.preallocation.fallbacks": 0,
+      "zero.range.preallocation.failures": 0,
+      "preallocation.truncate.failures": 0,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/mixed-sync0-cmw1/r3-B"
+  },
+  {
+    "workload": "mixed",
+    "sync": 0,
+    "concurrent": 0,
+    "round": 0,
+    "group": "A0",
+    "ops_sec": 400421.0,
+    "operations": 805084,
+    "process_seconds": 5.675550200045109,
+    "end_to_end_ops_sec": 141851.2693260296,
+    "histograms": {
+      "read": {
+        "count": 402550,
+        "p50_us": 24.45,
+        "p99_us": 96.63,
+        "p999_us": 109.57
+      },
+      "write": {
+        "count": 402534,
+        "p50_us": 44.57,
+        "p99_us": 93.48,
+        "p999_us": 2119.27
+      }
+    },
+    "scanned_keys": 600000,
+    "counters": {
+      "zero.range.preallocation.calls": null,
+      "zero.range.preallocation.wal.calls": null,
+      "zero.range.preallocation.flush.calls": null,
+      "zero.range.preallocation.compaction.calls": null,
+      "zero.range.preallocation.fallbacks": null,
+      "zero.range.preallocation.failures": null,
+      "preallocation.truncate.failures": null,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/mixed-sync0-cmw0/r0-A0"
+  },
+  {
+    "workload": "mixed",
+    "sync": 0,
+    "concurrent": 0,
+    "round": 0,
+    "group": "A1",
+    "ops_sec": 403269.0,
+    "operations": 810384,
+    "process_seconds": 5.7250483829993755,
+    "end_to_end_ops_sec": 141550.5941236145,
+    "histograms": {
+      "read": {
+        "count": 405200,
+        "p50_us": 23.83,
+        "p99_us": 99.11,
+        "p999_us": 109.68
+      },
+      "write": {
+        "count": 405184,
+        "p50_us": 44.47,
+        "p99_us": 89.88,
+        "p999_us": 1804.16
+      }
+    },
+    "scanned_keys": 600000,
+    "counters": {
+      "zero.range.preallocation.calls": 0,
+      "zero.range.preallocation.wal.calls": 0,
+      "zero.range.preallocation.flush.calls": 0,
+      "zero.range.preallocation.compaction.calls": 0,
+      "zero.range.preallocation.fallbacks": 0,
+      "zero.range.preallocation.failures": 0,
+      "preallocation.truncate.failures": 0,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/mixed-sync0-cmw0/r0-A1"
+  },
+  {
+    "workload": "mixed",
+    "sync": 0,
+    "concurrent": 0,
+    "round": 0,
+    "group": "B",
+    "ops_sec": 396800.0,
+    "operations": 797684,
+    "process_seconds": 5.774655955960043,
+    "end_to_end_ops_sec": 138135.32894140776,
+    "histograms": {
+      "read": {
+        "count": 398850,
+        "p50_us": 24.97,
+        "p99_us": 97.2,
+        "p999_us": 109.73
+      },
+      "write": {
+        "count": 398834,
+        "p50_us": 45.42,
+        "p99_us": 98.54,
+        "p999_us": 1841.95
+      }
+    },
+    "scanned_keys": 600000,
+    "counters": {
+      "zero.range.preallocation.calls": 33,
+      "zero.range.preallocation.wal.calls": 7,
+      "zero.range.preallocation.flush.calls": 7,
+      "zero.range.preallocation.compaction.calls": 19,
+      "zero.range.preallocation.fallbacks": 0,
+      "zero.range.preallocation.failures": 0,
+      "preallocation.truncate.failures": 0,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/mixed-sync0-cmw0/r0-B"
+  },
+  {
+    "workload": "mixed",
+    "sync": 0,
+    "concurrent": 0,
+    "round": 1,
+    "group": "A1",
+    "ops_sec": 340624.0,
+    "operations": 1707084,
+    "process_seconds": 9.745051198056899,
+    "end_to_end_ops_sec": 175174.45165812795,
+    "histograms": {
+      "read": {
+        "count": 853550,
+        "p50_us": 37.19,
+        "p99_us": 142.93,
+        "p999_us": 169.22
+      },
+      "write": {
+        "count": 853534,
+        "p50_us": 44.41,
+        "p99_us": 102.87,
+        "p999_us": 2594.86
+      }
+    },
+    "scanned_keys": 600000,
+    "counters": {
+      "zero.range.preallocation.calls": 0,
+      "zero.range.preallocation.wal.calls": 0,
+      "zero.range.preallocation.flush.calls": 0,
+      "zero.range.preallocation.compaction.calls": 0,
+      "zero.range.preallocation.fallbacks": 0,
+      "zero.range.preallocation.failures": 0,
+      "preallocation.truncate.failures": 0,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/mixed-sync0-cmw0/r1-A1"
+  },
+  {
+    "workload": "mixed",
+    "sync": 0,
+    "concurrent": 0,
+    "round": 1,
+    "group": "B",
+    "ops_sec": 348319.0,
+    "operations": 1745084,
+    "process_seconds": 9.637110805953853,
+    "end_to_end_ops_sec": 181079.58237046303,
+    "histograms": {
+      "read": {
+        "count": 872550,
+        "p50_us": 38.35,
+        "p99_us": 145.35,
+        "p999_us": 169.46
+      },
+      "write": {
+        "count": 872534,
+        "p50_us": 41.14,
+        "p99_us": 98.42,
+        "p999_us": 2544.06
+      }
+    },
+    "scanned_keys": 600000,
+    "counters": {
+      "zero.range.preallocation.calls": 59,
+      "zero.range.preallocation.wal.calls": 15,
+      "zero.range.preallocation.flush.calls": 15,
+      "zero.range.preallocation.compaction.calls": 29,
+      "zero.range.preallocation.fallbacks": 0,
+      "zero.range.preallocation.failures": 0,
+      "preallocation.truncate.failures": 0,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/mixed-sync0-cmw0/r1-B"
+  },
+  {
+    "workload": "mixed",
+    "sync": 0,
+    "concurrent": 0,
+    "round": 1,
+    "group": "A0",
+    "ops_sec": 351326.0,
+    "operations": 1760184,
+    "process_seconds": 9.695751424995251,
+    "end_to_end_ops_sec": 181541.78287433376,
+    "histograms": {
+      "read": {
+        "count": 880100,
+        "p50_us": 38.61,
+        "p99_us": 143.47,
+        "p999_us": 169.21
+      },
+      "write": {
+        "count": 880084,
+        "p50_us": 40.71,
+        "p99_us": 93.99,
+        "p999_us": 2531.38
+      }
+    },
+    "scanned_keys": 600000,
+    "counters": {
+      "zero.range.preallocation.calls": null,
+      "zero.range.preallocation.wal.calls": null,
+      "zero.range.preallocation.flush.calls": null,
+      "zero.range.preallocation.compaction.calls": null,
+      "zero.range.preallocation.fallbacks": null,
+      "zero.range.preallocation.failures": null,
+      "preallocation.truncate.failures": null,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/mixed-sync0-cmw0/r1-A0"
+  },
+  {
+    "workload": "mixed",
+    "sync": 0,
+    "concurrent": 0,
+    "round": 2,
+    "group": "B",
+    "ops_sec": 346074.0,
+    "operations": 1733284,
+    "process_seconds": 10.007403445080854,
+    "end_to_end_ops_sec": 173200.17220370955,
+    "histograms": {
+      "read": {
+        "count": 866650,
+        "p50_us": 38.48,
+        "p99_us": 146.46,
+        "p999_us": 169.3
+      },
+      "write": {
+        "count": 866634,
+        "p50_us": 40.63,
+        "p99_us": 98.46,
+        "p999_us": 2679.91
+      }
+    },
+    "scanned_keys": 600000,
+    "counters": {
+      "zero.range.preallocation.calls": 57,
+      "zero.range.preallocation.wal.calls": 14,
+      "zero.range.preallocation.flush.calls": 14,
+      "zero.range.preallocation.compaction.calls": 29,
+      "zero.range.preallocation.fallbacks": 0,
+      "zero.range.preallocation.failures": 0,
+      "preallocation.truncate.failures": 0,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/mixed-sync0-cmw0/r2-B"
+  },
+  {
+    "workload": "mixed",
+    "sync": 0,
+    "concurrent": 0,
+    "round": 2,
+    "group": "A0",
+    "ops_sec": 349012.0,
+    "operations": 1748884,
+    "process_seconds": 9.637418156024069,
+    "end_to_end_ops_sec": 181468.10397625258,
+    "histograms": {
+      "read": {
+        "count": 874450,
+        "p50_us": 38.71,
+        "p99_us": 141.6,
+        "p999_us": 169.72
+      },
+      "write": {
+        "count": 874434,
+        "p50_us": 41.56,
+        "p99_us": 97.94,
+        "p999_us": 2605.03
+      }
+    },
+    "scanned_keys": 600000,
+    "counters": {
+      "zero.range.preallocation.calls": null,
+      "zero.range.preallocation.wal.calls": null,
+      "zero.range.preallocation.flush.calls": null,
+      "zero.range.preallocation.compaction.calls": null,
+      "zero.range.preallocation.fallbacks": null,
+      "zero.range.preallocation.failures": null,
+      "preallocation.truncate.failures": null,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/mixed-sync0-cmw0/r2-A0"
+  },
+  {
+    "workload": "mixed",
+    "sync": 0,
+    "concurrent": 0,
+    "round": 2,
+    "group": "A1",
+    "ops_sec": 349077.0,
+    "operations": 1748884,
+    "process_seconds": 9.65924529102631,
+    "end_to_end_ops_sec": 181058.0379012384,
+    "histograms": {
+      "read": {
+        "count": 874450,
+        "p50_us": 38.8,
+        "p99_us": 146.48,
+        "p999_us": 169.84
+      },
+      "write": {
+        "count": 874434,
+        "p50_us": 41.08,
+        "p99_us": 99.15,
+        "p999_us": 2487.26
+      }
+    },
+    "scanned_keys": 600000,
+    "counters": {
+      "zero.range.preallocation.calls": 0,
+      "zero.range.preallocation.wal.calls": 0,
+      "zero.range.preallocation.flush.calls": 0,
+      "zero.range.preallocation.compaction.calls": 0,
+      "zero.range.preallocation.fallbacks": 0,
+      "zero.range.preallocation.failures": 0,
+      "preallocation.truncate.failures": 0,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/mixed-sync0-cmw0/r2-A1"
+  },
+  {
+    "workload": "mixed",
+    "sync": 0,
+    "concurrent": 0,
+    "round": 3,
+    "group": "A0",
+    "ops_sec": 349005.0,
+    "operations": 1748484,
+    "process_seconds": 9.592987766023725,
+    "end_to_end_ops_sec": 182266.8852130459,
+    "histograms": {
+      "read": {
+        "count": 874250,
+        "p50_us": 38.69,
+        "p99_us": 142.27,
+        "p999_us": 168.88
+      },
+      "write": {
+        "count": 874234,
+        "p50_us": 41.63,
+        "p99_us": 94.94,
+        "p999_us": 2581.42
+      }
+    },
+    "scanned_keys": 600000,
+    "counters": {
+      "zero.range.preallocation.calls": null,
+      "zero.range.preallocation.wal.calls": null,
+      "zero.range.preallocation.flush.calls": null,
+      "zero.range.preallocation.compaction.calls": null,
+      "zero.range.preallocation.fallbacks": null,
+      "zero.range.preallocation.failures": null,
+      "preallocation.truncate.failures": null,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/mixed-sync0-cmw0/r3-A0"
+  },
+  {
+    "workload": "mixed",
+    "sync": 0,
+    "concurrent": 0,
+    "round": 3,
+    "group": "A1",
+    "ops_sec": 347874.0,
+    "operations": 1742784,
+    "process_seconds": 9.597891679033637,
+    "end_to_end_ops_sec": 181579.8779858153,
+    "histograms": {
+      "read": {
+        "count": 871400,
+        "p50_us": 38.73,
+        "p99_us": 143.57,
+        "p999_us": 169.04
+      },
+      "write": {
+        "count": 871384,
+        "p50_us": 41.4,
+        "p99_us": 95.08,
+        "p999_us": 2610.15
+      }
+    },
+    "scanned_keys": 600000,
+    "counters": {
+      "zero.range.preallocation.calls": 0,
+      "zero.range.preallocation.wal.calls": 0,
+      "zero.range.preallocation.flush.calls": 0,
+      "zero.range.preallocation.compaction.calls": 0,
+      "zero.range.preallocation.fallbacks": 0,
+      "zero.range.preallocation.failures": 0,
+      "preallocation.truncate.failures": 0,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/mixed-sync0-cmw0/r3-A1"
+  },
+  {
+    "workload": "mixed",
+    "sync": 0,
+    "concurrent": 0,
+    "round": 3,
+    "group": "B",
+    "ops_sec": 345252.0,
+    "operations": 1729584,
+    "process_seconds": 9.689540983992629,
+    "end_to_end_ops_sec": 178500.09642947145,
+    "histograms": {
+      "read": {
+        "count": 864800,
+        "p50_us": 38.37,
+        "p99_us": 148.3,
+        "p999_us": 169.65
+      },
+      "write": {
+        "count": 864784,
+        "p50_us": 41.2,
+        "p99_us": 98.48,
+        "p999_us": 2672.46
+      }
+    },
+    "scanned_keys": 600000,
+    "counters": {
+      "zero.range.preallocation.calls": 57,
+      "zero.range.preallocation.wal.calls": 14,
+      "zero.range.preallocation.flush.calls": 14,
+      "zero.range.preallocation.compaction.calls": 29,
+      "zero.range.preallocation.fallbacks": 0,
+      "zero.range.preallocation.failures": 0,
+      "preallocation.truncate.failures": 0,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/mixed-sync0-cmw0/r3-B"
+  },
+  {
+    "workload": "write",
+    "sync": 1,
+    "concurrent": 1,
+    "round": 0,
+    "group": "A0",
+    "ops_sec": 71747.0,
+    "operations": 144784,
+    "process_seconds": 2.5675740210572258,
+    "end_to_end_ops_sec": 56389.41616194716,
+    "histograms": {
+      "write": {
+        "count": 144784,
+        "p50_us": 255.84,
+        "p99_us": 378.64,
+        "p999_us": 825.75
+      }
+    },
+    "scanned_keys": 128810,
+    "counters": {
+      "zero.range.preallocation.calls": null,
+      "zero.range.preallocation.wal.calls": null,
+      "zero.range.preallocation.flush.calls": null,
+      "zero.range.preallocation.compaction.calls": null,
+      "zero.range.preallocation.fallbacks": null,
+      "zero.range.preallocation.failures": null,
+      "preallocation.truncate.failures": null,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/write-sync1-cmw1/r0-A0"
+  },
+  {
+    "workload": "write",
+    "sync": 1,
+    "concurrent": 1,
+    "round": 0,
+    "group": "A1",
+    "ops_sec": 88614.0,
+    "operations": 178584,
+    "process_seconds": 2.7177485120482743,
+    "end_to_end_ops_sec": 65710.27422452983,
+    "histograms": {
+      "write": {
+        "count": 178584,
+        "p50_us": 179.22,
+        "p99_us": 366.94,
+        "p999_us": 526.12
+      }
+    },
+    "scanned_keys": 154745,
+    "counters": {
+      "zero.range.preallocation.calls": 0,
+      "zero.range.preallocation.wal.calls": 0,
+      "zero.range.preallocation.flush.calls": 0,
+      "zero.range.preallocation.compaction.calls": 0,
+      "zero.range.preallocation.fallbacks": 0,
+      "zero.range.preallocation.failures": 0,
+      "preallocation.truncate.failures": 0,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/write-sync1-cmw1/r0-A1"
+  },
+  {
+    "workload": "write",
+    "sync": 1,
+    "concurrent": 1,
+    "round": 0,
+    "group": "B",
+    "ops_sec": 84186.0,
+    "operations": 169684,
+    "process_seconds": 2.667560518020764,
+    "end_to_end_ops_sec": 63610.17823351935,
+    "histograms": {
+      "write": {
+        "count": 169684,
+        "p50_us": 171.59,
+        "p99_us": 371.97,
+        "p999_us": 571.16
+      }
+    },
+    "scanned_keys": 148010,
+    "counters": {
+      "zero.range.preallocation.calls": 9,
+      "zero.range.preallocation.wal.calls": 3,
+      "zero.range.preallocation.flush.calls": 3,
+      "zero.range.preallocation.compaction.calls": 3,
+      "zero.range.preallocation.fallbacks": 0,
+      "zero.range.preallocation.failures": 0,
+      "preallocation.truncate.failures": 0,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/write-sync1-cmw1/r0-B"
+  },
+  {
+    "workload": "write",
+    "sync": 1,
+    "concurrent": 1,
+    "round": 1,
+    "group": "A1",
+    "ops_sec": 78718.0,
+    "operations": 394484,
+    "process_seconds": 6.123370399000123,
+    "end_to_end_ops_sec": 64422.69114806688,
+    "histograms": {
+      "write": {
+        "count": 394484,
+        "p50_us": 192.58,
+        "p99_us": 375.68,
+        "p999_us": 575.22
+      }
+    },
+    "scanned_keys": 289363,
+    "counters": {
+      "zero.range.preallocation.calls": 0,
+      "zero.range.preallocation.wal.calls": 0,
+      "zero.range.preallocation.flush.calls": 0,
+      "zero.range.preallocation.compaction.calls": 0,
+      "zero.range.preallocation.fallbacks": 0,
+      "zero.range.preallocation.failures": 0,
+      "preallocation.truncate.failures": 0,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/write-sync1-cmw1/r1-A1"
+  },
+  {
+    "workload": "write",
+    "sync": 1,
+    "concurrent": 1,
+    "round": 1,
+    "group": "B",
+    "ops_sec": 90892.0,
+    "operations": 455384,
+    "process_seconds": 6.273430229979567,
+    "end_to_end_ops_sec": 72589.31450672772,
+    "histograms": {
+      "write": {
+        "count": 455384,
+        "p50_us": 168.68,
+        "p99_us": 371.51,
+        "p999_us": 562.88
+      }
+    },
+    "scanned_keys": 319278,
+    "counters": {
+      "zero.range.preallocation.calls": 25,
+      "zero.range.preallocation.wal.calls": 8,
+      "zero.range.preallocation.flush.calls": 8,
+      "zero.range.preallocation.compaction.calls": 9,
+      "zero.range.preallocation.fallbacks": 0,
+      "zero.range.preallocation.failures": 0,
+      "preallocation.truncate.failures": 0,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/write-sync1-cmw1/r1-B"
+  },
+  {
+    "workload": "write",
+    "sync": 1,
+    "concurrent": 1,
+    "round": 1,
+    "group": "A0",
+    "ops_sec": 88923.0,
+    "operations": 446084,
+    "process_seconds": 6.273302498972043,
+    "end_to_end_ops_sec": 71108.31975233082,
+    "histograms": {
+      "write": {
+        "count": 446084,
+        "p50_us": 187.0,
+        "p99_us": 373.74,
+        "p999_us": 570.86
+      }
+    },
+    "scanned_keys": 314886,
+    "counters": {
+      "zero.range.preallocation.calls": null,
+      "zero.range.preallocation.wal.calls": null,
+      "zero.range.preallocation.flush.calls": null,
+      "zero.range.preallocation.compaction.calls": null,
+      "zero.range.preallocation.fallbacks": null,
+      "zero.range.preallocation.failures": null,
+      "preallocation.truncate.failures": null,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/write-sync1-cmw1/r1-A0"
+  },
+  {
+    "workload": "write",
+    "sync": 1,
+    "concurrent": 1,
+    "round": 2,
+    "group": "B",
+    "ops_sec": 86214.0,
+    "operations": 431984,
+    "process_seconds": 6.273397439043038,
+    "end_to_end_ops_sec": 68859.65765719063,
+    "histograms": {
+      "write": {
+        "count": 431984,
+        "p50_us": 174.84,
+        "p99_us": 374.68,
+        "p999_us": 562.26
+      }
+    },
+    "scanned_keys": 308186,
+    "counters": {
+      "zero.range.preallocation.calls": 25,
+      "zero.range.preallocation.wal.calls": 8,
+      "zero.range.preallocation.flush.calls": 8,
+      "zero.range.preallocation.compaction.calls": 9,
+      "zero.range.preallocation.fallbacks": 0,
+      "zero.range.preallocation.failures": 0,
+      "preallocation.truncate.failures": 0,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/write-sync1-cmw1/r2-B"
+  },
+  {
+    "workload": "write",
+    "sync": 1,
+    "concurrent": 1,
+    "round": 2,
+    "group": "A0",
+    "ops_sec": 85953.0,
+    "operations": 431184,
+    "process_seconds": 6.273617609986104,
+    "end_to_end_ops_sec": 68729.7229135639,
+    "histograms": {
+      "write": {
+        "count": 431184,
+        "p50_us": 187.54,
+        "p99_us": 373.42,
+        "p999_us": 566.76
+      }
+    },
+    "scanned_keys": 307760,
+    "counters": {
+      "zero.range.preallocation.calls": null,
+      "zero.range.preallocation.wal.calls": null,
+      "zero.range.preallocation.flush.calls": null,
+      "zero.range.preallocation.compaction.calls": null,
+      "zero.range.preallocation.fallbacks": null,
+      "zero.range.preallocation.failures": null,
+      "preallocation.truncate.failures": null,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/write-sync1-cmw1/r2-A0"
+  },
+  {
+    "workload": "write",
+    "sync": 1,
+    "concurrent": 1,
+    "round": 2,
+    "group": "A1",
+    "ops_sec": 84557.0,
+    "operations": 423884,
+    "process_seconds": 6.222952145035379,
+    "end_to_end_ops_sec": 68116.22363803188,
+    "histograms": {
+      "write": {
+        "count": 423884,
+        "p50_us": 194.82,
+        "p99_us": 370.75,
+        "p999_us": 621.94
+      }
+    },
+    "scanned_keys": 304172,
+    "counters": {
+      "zero.range.preallocation.calls": 0,
+      "zero.range.preallocation.wal.calls": 0,
+      "zero.range.preallocation.flush.calls": 0,
+      "zero.range.preallocation.compaction.calls": 0,
+      "zero.range.preallocation.fallbacks": 0,
+      "zero.range.preallocation.failures": 0,
+      "preallocation.truncate.failures": 0,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/write-sync1-cmw1/r2-A1"
+  },
+  {
+    "workload": "write",
+    "sync": 1,
+    "concurrent": 1,
+    "round": 3,
+    "group": "A0",
+    "ops_sec": 81593.0,
+    "operations": 408884,
+    "process_seconds": 6.223354485002346,
+    "end_to_end_ops_sec": 65701.5442371745,
+    "histograms": {
+      "write": {
+        "count": 408884,
+        "p50_us": 193.44,
+        "p99_us": 375.84,
+        "p999_us": 574.17
+      }
+    },
+    "scanned_keys": 296696,
+    "counters": {
+      "zero.range.preallocation.calls": null,
+      "zero.range.preallocation.wal.calls": null,
+      "zero.range.preallocation.flush.calls": null,
+      "zero.range.preallocation.compaction.calls": null,
+      "zero.range.preallocation.fallbacks": null,
+      "zero.range.preallocation.failures": null,
+      "preallocation.truncate.failures": null,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/write-sync1-cmw1/r3-A0"
+  },
+  {
+    "workload": "write",
+    "sync": 1,
+    "concurrent": 1,
+    "round": 3,
+    "group": "A1",
+    "ops_sec": 93059.0,
+    "operations": 466484,
+    "process_seconds": 6.373821596964262,
+    "end_to_end_ops_sec": 73187.48931130706,
+    "histograms": {
+      "write": {
+        "count": 466484,
+        "p50_us": 188.97,
+        "p99_us": 257.08,
+        "p999_us": 578.16
+      }
+    },
+    "scanned_keys": 324490,
+    "counters": {
+      "zero.range.preallocation.calls": 0,
+      "zero.range.preallocation.wal.calls": 0,
+      "zero.range.preallocation.flush.calls": 0,
+      "zero.range.preallocation.compaction.calls": 0,
+      "zero.range.preallocation.fallbacks": 0,
+      "zero.range.preallocation.failures": 0,
+      "preallocation.truncate.failures": 0,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/write-sync1-cmw1/r3-A1"
+  },
+  {
+    "workload": "write",
+    "sync": 1,
+    "concurrent": 1,
+    "round": 3,
+    "group": "B",
+    "ops_sec": 93816.0,
+    "operations": 469984,
+    "process_seconds": 6.373536976985633,
+    "end_to_end_ops_sec": 73739.90324321913,
+    "histograms": {
+      "write": {
+        "count": 469984,
+        "p50_us": 165.15,
+        "p99_us": 366.36,
+        "p999_us": 559.03
+      }
+    },
+    "scanned_keys": 326055,
+    "counters": {
+      "zero.range.preallocation.calls": 26,
+      "zero.range.preallocation.wal.calls": 8,
+      "zero.range.preallocation.flush.calls": 8,
+      "zero.range.preallocation.compaction.calls": 10,
+      "zero.range.preallocation.fallbacks": 0,
+      "zero.range.preallocation.failures": 0,
+      "preallocation.truncate.failures": 0,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/write-sync1-cmw1/r3-B"
+  },
+  {
+    "workload": "mixed",
+    "sync": 1,
+    "concurrent": 1,
+    "round": 0,
+    "group": "A0",
+    "ops_sec": 186479.0,
+    "operations": 375184,
+    "process_seconds": 4.870863543939777,
+    "end_to_end_ops_sec": 77026.17751770029,
+    "histograms": {
+      "read": {
+        "count": 187600,
+        "p50_us": 15.24,
+        "p99_us": 44.57,
+        "p999_us": 50.65
+      },
+      "write": {
+        "count": 187584,
+        "p50_us": 168.58,
+        "p99_us": 249.8,
+        "p999_us": 508.08
+      }
+    },
+    "scanned_keys": 600000,
+    "counters": {
+      "zero.range.preallocation.calls": null,
+      "zero.range.preallocation.wal.calls": null,
+      "zero.range.preallocation.flush.calls": null,
+      "zero.range.preallocation.compaction.calls": null,
+      "zero.range.preallocation.fallbacks": null,
+      "zero.range.preallocation.failures": null,
+      "preallocation.truncate.failures": null,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/mixed-sync1-cmw1/r0-A0"
+  },
+  {
+    "workload": "mixed",
+    "sync": 1,
+    "concurrent": 1,
+    "round": 0,
+    "group": "A1",
+    "ops_sec": 178791.0,
+    "operations": 359784,
+    "process_seconds": 4.920615087961778,
+    "end_to_end_ops_sec": 73117.6882500334,
+    "histograms": {
+      "read": {
+        "count": 179900,
+        "p50_us": 14.87,
+        "p99_us": 45.08,
+        "p999_us": 50.75
+      },
+      "write": {
+        "count": 179884,
+        "p50_us": 174.71,
+        "p99_us": 249.84,
+        "p999_us": 540.9
+      }
+    },
+    "scanned_keys": 600000,
+    "counters": {
+      "zero.range.preallocation.calls": 0,
+      "zero.range.preallocation.wal.calls": 0,
+      "zero.range.preallocation.flush.calls": 0,
+      "zero.range.preallocation.compaction.calls": 0,
+      "zero.range.preallocation.fallbacks": 0,
+      "zero.range.preallocation.failures": 0,
+      "preallocation.truncate.failures": 0,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/mixed-sync1-cmw1/r0-A1"
+  },
+  {
+    "workload": "mixed",
+    "sync": 1,
+    "concurrent": 1,
+    "round": 0,
+    "group": "B",
+    "ops_sec": 187964.0,
+    "operations": 378384,
+    "process_seconds": 4.87084273295477,
+    "end_to_end_ops_sec": 77683.47711987473,
+    "histograms": {
+      "read": {
+        "count": 189200,
+        "p50_us": 15.46,
+        "p99_us": 45.02,
+        "p999_us": 50.68
+      },
+      "write": {
+        "count": 189184,
+        "p50_us": 151.97,
+        "p99_us": 249.96,
+        "p999_us": 519.84
+      }
+    },
+    "scanned_keys": 600000,
+    "counters": {
+      "zero.range.preallocation.calls": 21,
+      "zero.range.preallocation.wal.calls": 4,
+      "zero.range.preallocation.flush.calls": 4,
+      "zero.range.preallocation.compaction.calls": 13,
+      "zero.range.preallocation.fallbacks": 0,
+      "zero.range.preallocation.failures": 0,
+      "preallocation.truncate.failures": 0,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/mixed-sync1-cmw1/r0-B"
+  },
+  {
+    "workload": "mixed",
+    "sync": 1,
+    "concurrent": 1,
+    "round": 1,
+    "group": "A1",
+    "ops_sec": 167668.0,
+    "operations": 840584,
+    "process_seconds": 8.676892810035497,
+    "end_to_end_ops_sec": 96876.15352673248,
+    "histograms": {
+      "read": {
+        "count": 420300,
+        "p50_us": 22.29,
+        "p99_us": 69.55,
+        "p999_us": 75.95
+      },
+      "write": {
+        "count": 420284,
+        "p50_us": 174.48,
+        "p99_us": 293.16,
+        "p999_us": 674.11
+      }
+    },
+    "scanned_keys": 600000,
+    "counters": {
+      "zero.range.preallocation.calls": 0,
+      "zero.range.preallocation.wal.calls": 0,
+      "zero.range.preallocation.flush.calls": 0,
+      "zero.range.preallocation.compaction.calls": 0,
+      "zero.range.preallocation.fallbacks": 0,
+      "zero.range.preallocation.failures": 0,
+      "preallocation.truncate.failures": 0,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/mixed-sync1-cmw1/r1-A1"
+  },
+  {
+    "workload": "mixed",
+    "sync": 1,
+    "concurrent": 1,
+    "round": 1,
+    "group": "B",
+    "ops_sec": 175309.0,
+    "operations": 878484,
+    "process_seconds": 8.727951573906466,
+    "end_to_end_ops_sec": 100651.79584936757,
+    "histograms": {
+      "read": {
+        "count": 439250,
+        "p50_us": 23.12,
+        "p99_us": 71.36,
+        "p999_us": 94.29
+      },
+      "write": {
+        "count": 439234,
+        "p50_us": 152.08,
+        "p99_us": 288.54,
+        "p999_us": 740.14
+      }
+    },
+    "scanned_keys": 600000,
+    "counters": {
+      "zero.range.preallocation.calls": 35,
+      "zero.range.preallocation.wal.calls": 8,
+      "zero.range.preallocation.flush.calls": 8,
+      "zero.range.preallocation.compaction.calls": 19,
+      "zero.range.preallocation.fallbacks": 0,
+      "zero.range.preallocation.failures": 0,
+      "preallocation.truncate.failures": 0,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/mixed-sync1-cmw1/r1-B"
+  },
+  {
+    "workload": "mixed",
+    "sync": 1,
+    "concurrent": 1,
+    "round": 1,
+    "group": "A0",
+    "ops_sec": 172247.0,
+    "operations": 863484,
+    "process_seconds": 8.677083429996856,
+    "end_to_end_ops_sec": 99513.16095623998,
+    "histograms": {
+      "read": {
+        "count": 431750,
+        "p50_us": 22.57,
+        "p99_us": 69.95,
+        "p999_us": 80.01
+      },
+      "write": {
+        "count": 431734,
+        "p50_us": 168.93,
+        "p99_us": 262.17,
+        "p999_us": 567.6
+      }
+    },
+    "scanned_keys": 600000,
+    "counters": {
+      "zero.range.preallocation.calls": null,
+      "zero.range.preallocation.wal.calls": null,
+      "zero.range.preallocation.flush.calls": null,
+      "zero.range.preallocation.compaction.calls": null,
+      "zero.range.preallocation.fallbacks": null,
+      "zero.range.preallocation.failures": null,
+      "preallocation.truncate.failures": null,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/mixed-sync1-cmw1/r1-A0"
+  },
+  {
+    "workload": "mixed",
+    "sync": 1,
+    "concurrent": 1,
+    "round": 2,
+    "group": "B",
+    "ops_sec": 175813.0,
+    "operations": 881084,
+    "process_seconds": 8.677128689945675,
+    "end_to_end_ops_sec": 101540.96262522023,
+    "histograms": {
+      "read": {
+        "count": 440550,
+        "p50_us": 22.94,
+        "p99_us": 71.03,
+        "p999_us": 86.06
+      },
+      "write": {
+        "count": 440534,
+        "p50_us": 152.25,
+        "p99_us": 280.12,
+        "p999_us": 570.71
+      }
+    },
+    "scanned_keys": 600000,
+    "counters": {
+      "zero.range.preallocation.calls": 35,
+      "zero.range.preallocation.wal.calls": 8,
+      "zero.range.preallocation.flush.calls": 8,
+      "zero.range.preallocation.compaction.calls": 19,
+      "zero.range.preallocation.fallbacks": 0,
+      "zero.range.preallocation.failures": 0,
+      "preallocation.truncate.failures": 0,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/mixed-sync1-cmw1/r2-B"
+  },
+  {
+    "workload": "mixed",
+    "sync": 1,
+    "concurrent": 1,
+    "round": 2,
+    "group": "A0",
+    "ops_sec": 172371.0,
+    "operations": 864084,
+    "process_seconds": 8.677127860020846,
+    "end_to_end_ops_sec": 99581.7987171995,
+    "histograms": {
+      "read": {
+        "count": 432050,
+        "p50_us": 22.69,
+        "p99_us": 70.86,
+        "p999_us": 90.7
+      },
+      "write": {
+        "count": 432034,
+        "p50_us": 167.62,
+        "p99_us": 271.71,
+        "p999_us": 592.96
+      }
+    },
+    "scanned_keys": 600000,
+    "counters": {
+      "zero.range.preallocation.calls": null,
+      "zero.range.preallocation.wal.calls": null,
+      "zero.range.preallocation.flush.calls": null,
+      "zero.range.preallocation.compaction.calls": null,
+      "zero.range.preallocation.fallbacks": null,
+      "zero.range.preallocation.failures": null,
+      "preallocation.truncate.failures": null,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/mixed-sync1-cmw1/r2-A0"
+  },
+  {
+    "workload": "mixed",
+    "sync": 1,
+    "concurrent": 1,
+    "round": 2,
+    "group": "A1",
+    "ops_sec": 164731.0,
+    "operations": 825384,
+    "process_seconds": 8.626979305990972,
+    "end_to_end_ops_sec": 95674.73975819269,
+    "histograms": {
+      "read": {
+        "count": 412700,
+        "p50_us": 22.06,
+        "p99_us": 69.4,
+        "p999_us": 75.89
+      },
+      "write": {
+        "count": 412684,
+        "p50_us": 174.69,
+        "p99_us": 305.94,
+        "p999_us": 769.75
+      }
+    },
+    "scanned_keys": 600000,
+    "counters": {
+      "zero.range.preallocation.calls": 0,
+      "zero.range.preallocation.wal.calls": 0,
+      "zero.range.preallocation.flush.calls": 0,
+      "zero.range.preallocation.compaction.calls": 0,
+      "zero.range.preallocation.fallbacks": 0,
+      "zero.range.preallocation.failures": 0,
+      "preallocation.truncate.failures": 0,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/mixed-sync1-cmw1/r2-A1"
+  },
+  {
+    "workload": "mixed",
+    "sync": 1,
+    "concurrent": 1,
+    "round": 3,
+    "group": "A0",
+    "ops_sec": 156158.0,
+    "operations": 783284,
+    "process_seconds": 8.527082588989288,
+    "end_to_end_ops_sec": 91858.38085014284,
+    "histograms": {
+      "read": {
+        "count": 391650,
+        "p50_us": 21.3,
+        "p99_us": 68.37,
+        "p999_us": 75.88
+      },
+      "write": {
+        "count": 391634,
+        "p50_us": 174.56,
+        "p99_us": 373.55,
+        "p999_us": 739.17
+      }
+    },
+    "scanned_keys": 600000,
+    "counters": {
+      "zero.range.preallocation.calls": null,
+      "zero.range.preallocation.wal.calls": null,
+      "zero.range.preallocation.flush.calls": null,
+      "zero.range.preallocation.compaction.calls": null,
+      "zero.range.preallocation.fallbacks": null,
+      "zero.range.preallocation.failures": null,
+      "preallocation.truncate.failures": null,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/mixed-sync1-cmw1/r3-A0"
+  },
+  {
+    "workload": "mixed",
+    "sync": 1,
+    "concurrent": 1,
+    "round": 3,
+    "group": "A1",
+    "ops_sec": 165473.0,
+    "operations": 829384,
+    "process_seconds": 8.677013039006852,
+    "end_to_end_ops_sec": 95584.04444842567,
+    "histograms": {
+      "read": {
+        "count": 414700,
+        "p50_us": 21.97,
+        "p99_us": 69.11,
+        "p999_us": 75.97
+      },
+      "write": {
+        "count": 414684,
+        "p50_us": 172.86,
+        "p99_us": 366.37,
+        "p999_us": 763.54
+      }
+    },
+    "scanned_keys": 600000,
+    "counters": {
+      "zero.range.preallocation.calls": 0,
+      "zero.range.preallocation.wal.calls": 0,
+      "zero.range.preallocation.flush.calls": 0,
+      "zero.range.preallocation.compaction.calls": 0,
+      "zero.range.preallocation.fallbacks": 0,
+      "zero.range.preallocation.failures": 0,
+      "preallocation.truncate.failures": 0,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/mixed-sync1-cmw1/r3-A1"
+  },
+  {
+    "workload": "mixed",
+    "sync": 1,
+    "concurrent": 1,
+    "round": 3,
+    "group": "B",
+    "ops_sec": 174083.0,
+    "operations": 872584,
+    "process_seconds": 8.627389576053247,
+    "end_to_end_ops_sec": 101141.1380357741,
+    "histograms": {
+      "read": {
+        "count": 436300,
+        "p50_us": 22.69,
+        "p99_us": 70.5,
+        "p999_us": 85.34
+      },
+      "write": {
+        "count": 436284,
+        "p50_us": 152.89,
+        "p99_us": 317.75,
+        "p999_us": 578.54
+      }
+    },
+    "scanned_keys": 600000,
+    "counters": {
+      "zero.range.preallocation.calls": 35,
+      "zero.range.preallocation.wal.calls": 8,
+      "zero.range.preallocation.flush.calls": 8,
+      "zero.range.preallocation.compaction.calls": 19,
+      "zero.range.preallocation.fallbacks": 0,
+      "zero.range.preallocation.failures": 0,
+      "preallocation.truncate.failures": 0,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/mixed-sync1-cmw1/r3-B"
+  },
+  {
+    "workload": "write",
+    "sync": 0,
+    "concurrent": 1,
+    "round": 0,
+    "group": "A0",
+    "ops_sec": 352715.0,
+    "operations": 706684,
+    "process_seconds": 4.52009362692479,
+    "end_to_end_ops_sec": 156342.77922707252,
+    "histograms": {
+      "write": {
+        "count": 706684,
+        "p50_us": 43.37,
+        "p99_us": 82.15,
+        "p999_us": 298.57
+      }
+    },
+    "scanned_keys": 415322,
+    "counters": {
+      "zero.range.preallocation.calls": null,
+      "zero.range.preallocation.wal.calls": null,
+      "zero.range.preallocation.flush.calls": null,
+      "zero.range.preallocation.compaction.calls": null,
+      "zero.range.preallocation.fallbacks": null,
+      "zero.range.preallocation.failures": null,
+      "preallocation.truncate.failures": null,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/write-sync0-cmw1/r0-A0"
+  },
+  {
+    "workload": "write",
+    "sync": 0,
+    "concurrent": 1,
+    "round": 0,
+    "group": "A1",
+    "ops_sec": 351068.0,
+    "operations": 703384,
+    "process_seconds": 4.520233156974427,
+    "end_to_end_ops_sec": 155607.90241864492,
+    "histograms": {
+      "write": {
+        "count": 703384,
+        "p50_us": 43.48,
+        "p99_us": 75.94,
+        "p999_us": 290.3
+      }
+    },
+    "scanned_keys": 414306,
+    "counters": {
+      "zero.range.preallocation.calls": 0,
+      "zero.range.preallocation.wal.calls": 0,
+      "zero.range.preallocation.flush.calls": 0,
+      "zero.range.preallocation.compaction.calls": 0,
+      "zero.range.preallocation.fallbacks": 0,
+      "zero.range.preallocation.failures": 0,
+      "preallocation.truncate.failures": 0,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/write-sync0-cmw1/r0-A1"
+  },
+  {
+    "workload": "write",
+    "sync": 0,
+    "concurrent": 1,
+    "round": 0,
+    "group": "B",
+    "ops_sec": 344924.0,
+    "operations": 691484,
+    "process_seconds": 4.52064202807378,
+    "end_to_end_ops_sec": 152961.45894892665,
+    "histograms": {
+      "write": {
+        "count": 691484,
+        "p50_us": 43.59,
+        "p99_us": 89.48,
+        "p999_us": 312.04
+      }
+    },
+    "scanned_keys": 410624,
+    "counters": {
+      "zero.range.preallocation.calls": 41,
+      "zero.range.preallocation.wal.calls": 12,
+      "zero.range.preallocation.flush.calls": 12,
+      "zero.range.preallocation.compaction.calls": 17,
+      "zero.range.preallocation.fallbacks": 0,
+      "zero.range.preallocation.failures": 0,
+      "preallocation.truncate.failures": 0,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/write-sync0-cmw1/r0-B"
+  },
+  {
+    "workload": "write",
+    "sync": 0,
+    "concurrent": 1,
+    "round": 1,
+    "group": "A1",
+    "ops_sec": 336563.0,
+    "operations": 1683684,
+    "process_seconds": 8.42749880196061,
+    "end_to_end_ops_sec": 199784.54338175646,
+    "histograms": {
+      "write": {
+        "count": 1683684,
+        "p50_us": 44.19,
+        "p99_us": 101.07,
+        "p999_us": 296.5
+      }
+    },
+    "scanned_keys": 563836,
+    "counters": {
+      "zero.range.preallocation.calls": 0,
+      "zero.range.preallocation.wal.calls": 0,
+      "zero.range.preallocation.flush.calls": 0,
+      "zero.range.preallocation.compaction.calls": 0,
+      "zero.range.preallocation.fallbacks": 0,
+      "zero.range.preallocation.failures": 0,
+      "preallocation.truncate.failures": 0,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/write-sync0-cmw1/r1-A1"
+  },
+  {
+    "workload": "write",
+    "sync": 0,
+    "concurrent": 1,
+    "round": 1,
+    "group": "B",
+    "ops_sec": 337599.0,
+    "operations": 1688984,
+    "process_seconds": 8.377356748096645,
+    "end_to_end_ops_sec": 201612.99688994876,
+    "histograms": {
+      "write": {
+        "count": 1688984,
+        "p50_us": 44.13,
+        "p99_us": 99.42,
+        "p999_us": 300.2
+      }
+    },
+    "scanned_keys": 564107,
+    "counters": {
+      "zero.range.preallocation.calls": 83,
+      "zero.range.preallocation.wal.calls": 28,
+      "zero.range.preallocation.flush.calls": 28,
+      "zero.range.preallocation.compaction.calls": 27,
+      "zero.range.preallocation.fallbacks": 0,
+      "zero.range.preallocation.failures": 0,
+      "preallocation.truncate.failures": 0,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/write-sync0-cmw1/r1-B"
+  },
+  {
+    "workload": "write",
+    "sync": 0,
+    "concurrent": 1,
+    "round": 1,
+    "group": "A0",
+    "ops_sec": 340834.0,
+    "operations": 1705384,
+    "process_seconds": 10.12834556796588,
+    "end_to_end_ops_sec": 168377.3513212089,
+    "histograms": {
+      "write": {
+        "count": 1705384,
+        "p50_us": 43.96,
+        "p99_us": 102.58,
+        "p999_us": 294.12
+      }
+    },
+    "scanned_keys": 565046,
+    "counters": {
+      "zero.range.preallocation.calls": null,
+      "zero.range.preallocation.wal.calls": null,
+      "zero.range.preallocation.flush.calls": null,
+      "zero.range.preallocation.compaction.calls": null,
+      "zero.range.preallocation.fallbacks": null,
+      "zero.range.preallocation.failures": null,
+      "preallocation.truncate.failures": null,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/write-sync0-cmw1/r1-A0"
+  },
+  {
+    "workload": "write",
+    "sync": 0,
+    "concurrent": 1,
+    "round": 2,
+    "group": "B",
+    "ops_sec": 330391.0,
+    "operations": 1653184,
+    "process_seconds": 8.431338503956795,
+    "end_to_end_ops_sec": 196076.10336415353,
+    "histograms": {
+      "write": {
+        "count": 1653184,
+        "p50_us": 44.57,
+        "p99_us": 104.32,
+        "p999_us": 321.68
+      }
+    },
+    "scanned_keys": 561860,
+    "counters": {
+      "zero.range.preallocation.calls": 81,
+      "zero.range.preallocation.wal.calls": 27,
+      "zero.range.preallocation.flush.calls": 27,
+      "zero.range.preallocation.compaction.calls": 27,
+      "zero.range.preallocation.fallbacks": 0,
+      "zero.range.preallocation.failures": 0,
+      "preallocation.truncate.failures": 0,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/write-sync0-cmw1/r2-B"
+  },
+  {
+    "workload": "write",
+    "sync": 0,
+    "concurrent": 1,
+    "round": 2,
+    "group": "A0",
+    "ops_sec": 336981.0,
+    "operations": 1685984,
+    "process_seconds": 8.427430550917052,
+    "end_to_end_ops_sec": 200059.07967008228,
+    "histograms": {
+      "write": {
+        "count": 1685984,
+        "p50_us": 44.16,
+        "p99_us": 101.73,
+        "p999_us": 298.67
+      }
+    },
+    "scanned_keys": 563923,
+    "counters": {
+      "zero.range.preallocation.calls": null,
+      "zero.range.preallocation.wal.calls": null,
+      "zero.range.preallocation.flush.calls": null,
+      "zero.range.preallocation.compaction.calls": null,
+      "zero.range.preallocation.fallbacks": null,
+      "zero.range.preallocation.failures": null,
+      "preallocation.truncate.failures": null,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/write-sync0-cmw1/r2-A0"
+  },
+  {
+    "workload": "write",
+    "sync": 0,
+    "concurrent": 1,
+    "round": 2,
+    "group": "A1",
+    "ops_sec": 344480.0,
+    "operations": 1723284,
+    "process_seconds": 9.027915916987695,
+    "end_to_end_ops_sec": 190883.9222524572,
+    "histograms": {
+      "write": {
+        "count": 1723284,
+        "p50_us": 43.75,
+        "p99_us": 97.44,
+        "p999_us": 290.71
+      }
+    },
+    "scanned_keys": 566094,
+    "counters": {
+      "zero.range.preallocation.calls": 0,
+      "zero.range.preallocation.wal.calls": 0,
+      "zero.range.preallocation.flush.calls": 0,
+      "zero.range.preallocation.compaction.calls": 0,
+      "zero.range.preallocation.fallbacks": 0,
+      "zero.range.preallocation.failures": 0,
+      "preallocation.truncate.failures": 0,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/write-sync0-cmw1/r2-A1"
+  },
+  {
+    "workload": "write",
+    "sync": 0,
+    "concurrent": 1,
+    "round": 3,
+    "group": "A0",
+    "ops_sec": 339372.0,
+    "operations": 1697784,
+    "process_seconds": 8.42580711003393,
+    "end_to_end_ops_sec": 201498.0853262333,
+    "histograms": {
+      "write": {
+        "count": 1697784,
+        "p50_us": 43.94,
+        "p99_us": 93.55,
+        "p999_us": 315.19
+      }
+    },
+    "scanned_keys": 564643,
+    "counters": {
+      "zero.range.preallocation.calls": null,
+      "zero.range.preallocation.wal.calls": null,
+      "zero.range.preallocation.flush.calls": null,
+      "zero.range.preallocation.compaction.calls": null,
+      "zero.range.preallocation.fallbacks": null,
+      "zero.range.preallocation.failures": null,
+      "preallocation.truncate.failures": null,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/write-sync0-cmw1/r3-A0"
+  },
+  {
+    "workload": "write",
+    "sync": 0,
+    "concurrent": 1,
+    "round": 3,
+    "group": "A1",
+    "ops_sec": 337491.0,
+    "operations": 1688484,
+    "process_seconds": 8.527453539078124,
+    "end_to_end_ops_sec": 198005.65224569218,
+    "histograms": {
+      "write": {
+        "count": 1688484,
+        "p50_us": 44.18,
+        "p99_us": 97.72,
+        "p999_us": 317.15
+      }
+    },
+    "scanned_keys": 564079,
+    "counters": {
+      "zero.range.preallocation.calls": 0,
+      "zero.range.preallocation.wal.calls": 0,
+      "zero.range.preallocation.flush.calls": 0,
+      "zero.range.preallocation.compaction.calls": 0,
+      "zero.range.preallocation.fallbacks": 0,
+      "zero.range.preallocation.failures": 0,
+      "preallocation.truncate.failures": 0,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/write-sync0-cmw1/r3-A1"
+  },
+  {
+    "workload": "write",
+    "sync": 0,
+    "concurrent": 1,
+    "round": 3,
+    "group": "B",
+    "ops_sec": 331728.0,
+    "operations": 1659784,
+    "process_seconds": 8.377115788054653,
+    "end_to_end_ops_sec": 198133.10953237256,
+    "histograms": {
+      "write": {
+        "count": 1659784,
+        "p50_us": 44.35,
+        "p99_us": 102.76,
+        "p999_us": 318.39
+      }
+    },
+    "scanned_keys": 562292,
+    "counters": {
+      "zero.range.preallocation.calls": 81,
+      "zero.range.preallocation.wal.calls": 27,
+      "zero.range.preallocation.flush.calls": 27,
+      "zero.range.preallocation.compaction.calls": 27,
+      "zero.range.preallocation.fallbacks": 0,
+      "zero.range.preallocation.failures": 0,
+      "preallocation.truncate.failures": 0,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/write-sync0-cmw1/r3-B"
+  },
+  {
+    "workload": "mixed",
+    "sync": 1,
+    "concurrent": 0,
+    "round": 0,
+    "group": "A0",
+    "ops_sec": 121001.0,
+    "operations": 243684,
+    "process_seconds": 4.720178943010978,
+    "end_to_end_ops_sec": 51626.00887426425,
+    "histograms": {
+      "read": {
+        "count": 121850,
+        "p50_us": 12.5,
+        "p99_us": 31.5,
+        "p999_us": 36.35
+      },
+      "write": {
+        "count": 121834,
+        "p50_us": 255.45,
+        "p99_us": 378.14,
+        "p999_us": 513.22
+      }
+    },
+    "scanned_keys": 600000,
+    "counters": {
+      "zero.range.preallocation.calls": null,
+      "zero.range.preallocation.wal.calls": null,
+      "zero.range.preallocation.flush.calls": null,
+      "zero.range.preallocation.compaction.calls": null,
+      "zero.range.preallocation.fallbacks": null,
+      "zero.range.preallocation.failures": null,
+      "preallocation.truncate.failures": null,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/mixed-sync1-cmw0/r0-A0"
+  },
+  {
+    "workload": "mixed",
+    "sync": 1,
+    "concurrent": 0,
+    "round": 0,
+    "group": "A1",
+    "ops_sec": 124942.0,
+    "operations": 251684,
+    "process_seconds": 4.720048711984418,
+    "end_to_end_ops_sec": 53322.33105157641,
+    "histograms": {
+      "read": {
+        "count": 125850,
+        "p50_us": 12.63,
+        "p99_us": 31.0,
+        "p999_us": 35.01
+      },
+      "write": {
+        "count": 125834,
+        "p50_us": 236.52,
+        "p99_us": 377.55,
+        "p999_us": 504.44
+      }
+    },
+    "scanned_keys": 600000,
+    "counters": {
+      "zero.range.preallocation.calls": 0,
+      "zero.range.preallocation.wal.calls": 0,
+      "zero.range.preallocation.flush.calls": 0,
+      "zero.range.preallocation.compaction.calls": 0,
+      "zero.range.preallocation.fallbacks": 0,
+      "zero.range.preallocation.failures": 0,
+      "preallocation.truncate.failures": 0,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/mixed-sync1-cmw0/r0-A1"
+  },
+  {
+    "workload": "mixed",
+    "sync": 1,
+    "concurrent": 0,
+    "round": 0,
+    "group": "B",
+    "ops_sec": 126721.0,
+    "operations": 255384,
+    "process_seconds": 4.620007983990945,
+    "end_to_end_ops_sec": 55277.826550288606,
+    "histograms": {
+      "read": {
+        "count": 127700,
+        "p50_us": 12.69,
+        "p99_us": 32.54,
+        "p999_us": 44.01
+      },
+      "write": {
+        "count": 127684,
+        "p50_us": 230.42,
+        "p99_us": 377.07,
+        "p999_us": 487.48
+      }
+    },
+    "scanned_keys": 600000,
+    "counters": {
+      "zero.range.preallocation.calls": 18,
+      "zero.range.preallocation.wal.calls": 3,
+      "zero.range.preallocation.flush.calls": 3,
+      "zero.range.preallocation.compaction.calls": 12,
+      "zero.range.preallocation.fallbacks": 0,
+      "zero.range.preallocation.failures": 0,
+      "preallocation.truncate.failures": 0,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/mixed-sync1-cmw0/r0-B"
+  },
+  {
+    "workload": "mixed",
+    "sync": 1,
+    "concurrent": 0,
+    "round": 1,
+    "group": "A1",
+    "ops_sec": 118160.0,
+    "operations": 592884,
+    "process_seconds": 8.275820489041507,
+    "end_to_end_ops_sec": 71640.50993917426,
+    "histograms": {
+      "read": {
+        "count": 296450,
+        "p50_us": 19.75,
+        "p99_us": 66.94,
+        "p999_us": 75.77
+      },
+      "write": {
+        "count": 296434,
+        "p50_us": 239.77,
+        "p99_us": 377.86,
+        "p999_us": 545.8
+      }
+    },
+    "scanned_keys": 600000,
+    "counters": {
+      "zero.range.preallocation.calls": 0,
+      "zero.range.preallocation.wal.calls": 0,
+      "zero.range.preallocation.flush.calls": 0,
+      "zero.range.preallocation.compaction.calls": 0,
+      "zero.range.preallocation.fallbacks": 0,
+      "zero.range.preallocation.failures": 0,
+      "preallocation.truncate.failures": 0,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/mixed-sync1-cmw0/r1-A1"
+  },
+  {
+    "workload": "mixed",
+    "sync": 1,
+    "concurrent": 0,
+    "round": 1,
+    "group": "B",
+    "ops_sec": 118290.0,
+    "operations": 593284,
+    "process_seconds": 8.676084798993543,
+    "end_to_end_ops_sec": 68381.53542123322,
+    "histograms": {
+      "read": {
+        "count": 296650,
+        "p50_us": 20.39,
+        "p99_us": 70.18,
+        "p999_us": 82.59
+      },
+      "write": {
+        "count": 296634,
+        "p50_us": 252.99,
+        "p99_us": 378.13,
+        "p999_us": 543.52
+      }
+    },
+    "scanned_keys": 600000,
+    "counters": {
+      "zero.range.preallocation.calls": 28,
+      "zero.range.preallocation.wal.calls": 5,
+      "zero.range.preallocation.flush.calls": 5,
+      "zero.range.preallocation.compaction.calls": 18,
+      "zero.range.preallocation.fallbacks": 0,
+      "zero.range.preallocation.failures": 0,
+      "preallocation.truncate.failures": 0,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/mixed-sync1-cmw0/r1-B"
+  },
+  {
+    "workload": "mixed",
+    "sync": 1,
+    "concurrent": 0,
+    "round": 1,
+    "group": "A0",
+    "ops_sec": 117432.0,
+    "operations": 589184,
+    "process_seconds": 8.225891435984522,
+    "end_to_end_ops_sec": 71625.5502014759,
+    "histograms": {
+      "read": {
+        "count": 294600,
+        "p50_us": 19.88,
+        "p99_us": 66.86,
+        "p999_us": 75.66
+      },
+      "write": {
+        "count": 294584,
+        "p50_us": 242.22,
+        "p99_us": 377.85,
+        "p999_us": 541.52
+      }
+    },
+    "scanned_keys": 600000,
+    "counters": {
+      "zero.range.preallocation.calls": null,
+      "zero.range.preallocation.wal.calls": null,
+      "zero.range.preallocation.flush.calls": null,
+      "zero.range.preallocation.compaction.calls": null,
+      "zero.range.preallocation.fallbacks": null,
+      "zero.range.preallocation.failures": null,
+      "preallocation.truncate.failures": null,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/mixed-sync1-cmw0/r1-A0"
+  },
+  {
+    "workload": "mixed",
+    "sync": 1,
+    "concurrent": 0,
+    "round": 2,
+    "group": "B",
+    "ops_sec": 119315.0,
+    "operations": 598784,
+    "process_seconds": 8.276003698934801,
+    "end_to_end_ops_sec": 72351.8284648748,
+    "histograms": {
+      "read": {
+        "count": 299400,
+        "p50_us": 20.3,
+        "p99_us": 68.41,
+        "p999_us": 75.93
+      },
+      "write": {
+        "count": 299384,
+        "p50_us": 238.25,
+        "p99_us": 377.82,
+        "p999_us": 548.26
+      }
+    },
+    "scanned_keys": 600000,
+    "counters": {
+      "zero.range.preallocation.calls": 28,
+      "zero.range.preallocation.wal.calls": 5,
+      "zero.range.preallocation.flush.calls": 5,
+      "zero.range.preallocation.compaction.calls": 18,
+      "zero.range.preallocation.fallbacks": 0,
+      "zero.range.preallocation.failures": 0,
+      "preallocation.truncate.failures": 0,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/mixed-sync1-cmw0/r2-B"
+  },
+  {
+    "workload": "mixed",
+    "sync": 1,
+    "concurrent": 0,
+    "round": 2,
+    "group": "A0",
+    "ops_sec": 117937.0,
+    "operations": 591484,
+    "process_seconds": 8.226186306099407,
+    "end_to_end_ops_sec": 71902.5776940448,
+    "histograms": {
+      "read": {
+        "count": 295750,
+        "p50_us": 19.84,
+        "p99_us": 67.74,
+        "p999_us": 75.74
+      },
+      "write": {
+        "count": 295734,
+        "p50_us": 240.5,
+        "p99_us": 377.75,
+        "p999_us": 528.68
+      }
+    },
+    "scanned_keys": 600000,
+    "counters": {
+      "zero.range.preallocation.calls": null,
+      "zero.range.preallocation.wal.calls": null,
+      "zero.range.preallocation.flush.calls": null,
+      "zero.range.preallocation.compaction.calls": null,
+      "zero.range.preallocation.fallbacks": null,
+      "zero.range.preallocation.failures": null,
+      "preallocation.truncate.failures": null,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/mixed-sync1-cmw0/r2-A0"
+  },
+  {
+    "workload": "mixed",
+    "sync": 1,
+    "concurrent": 0,
+    "round": 2,
+    "group": "A1",
+    "ops_sec": 117215.0,
+    "operations": 587984,
+    "process_seconds": 8.226366725983098,
+    "end_to_end_ops_sec": 71475.53951647256,
+    "histograms": {
+      "read": {
+        "count": 294000,
+        "p50_us": 19.83,
+        "p99_us": 68.47,
+        "p999_us": 75.84
+      },
+      "write": {
+        "count": 293984,
+        "p50_us": 243.91,
+        "p99_us": 377.95,
+        "p999_us": 543.93
+      }
+    },
+    "scanned_keys": 600000,
+    "counters": {
+      "zero.range.preallocation.calls": 0,
+      "zero.range.preallocation.wal.calls": 0,
+      "zero.range.preallocation.flush.calls": 0,
+      "zero.range.preallocation.compaction.calls": 0,
+      "zero.range.preallocation.fallbacks": 0,
+      "zero.range.preallocation.failures": 0,
+      "preallocation.truncate.failures": 0,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/mixed-sync1-cmw0/r2-A1"
+  },
+  {
+    "workload": "mixed",
+    "sync": 1,
+    "concurrent": 0,
+    "round": 3,
+    "group": "A0",
+    "ops_sec": 117593.0,
+    "operations": 589984,
+    "process_seconds": 8.225888765067793,
+    "end_to_end_ops_sec": 71722.82738680307,
+    "histograms": {
+      "read": {
+        "count": 295000,
+        "p50_us": 19.9,
+        "p99_us": 64.6,
+        "p999_us": 75.63
+      },
+      "write": {
+        "count": 294984,
+        "p50_us": 244.73,
+        "p99_us": 377.95,
+        "p999_us": 543.07
+      }
+    },
+    "scanned_keys": 600000,
+    "counters": {
+      "zero.range.preallocation.calls": null,
+      "zero.range.preallocation.wal.calls": null,
+      "zero.range.preallocation.flush.calls": null,
+      "zero.range.preallocation.compaction.calls": null,
+      "zero.range.preallocation.fallbacks": null,
+      "zero.range.preallocation.failures": null,
+      "preallocation.truncate.failures": null,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/mixed-sync1-cmw0/r3-A0"
+  },
+  {
+    "workload": "mixed",
+    "sync": 1,
+    "concurrent": 0,
+    "round": 3,
+    "group": "A1",
+    "ops_sec": 116848.0,
+    "operations": 585884,
+    "process_seconds": 8.276017050025985,
+    "end_to_end_ops_sec": 70792.99093495228,
+    "histograms": {
+      "read": {
+        "count": 292950,
+        "p50_us": 19.7,
+        "p99_us": 67.52,
+        "p999_us": 75.82
+      },
+      "write": {
+        "count": 292934,
+        "p50_us": 250.87,
+        "p99_us": 378.06,
+        "p999_us": 537.97
+      }
+    },
+    "scanned_keys": 600000,
+    "counters": {
+      "zero.range.preallocation.calls": 0,
+      "zero.range.preallocation.wal.calls": 0,
+      "zero.range.preallocation.flush.calls": 0,
+      "zero.range.preallocation.compaction.calls": 0,
+      "zero.range.preallocation.fallbacks": 0,
+      "zero.range.preallocation.failures": 0,
+      "preallocation.truncate.failures": 0,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/mixed-sync1-cmw0/r3-A1"
+  },
+  {
+    "workload": "mixed",
+    "sync": 1,
+    "concurrent": 0,
+    "round": 3,
+    "group": "B",
+    "ops_sec": 134049.0,
+    "operations": 671884,
+    "process_seconds": 8.776828707079403,
+    "end_to_end_ops_sec": 76552.02379169795,
+    "histograms": {
+      "read": {
+        "count": 335950,
+        "p50_us": 21.08,
+        "p99_us": 71.69,
+        "p999_us": 97.37
+      },
+      "write": {
+        "count": 335934,
+        "p50_us": 207.48,
+        "p99_us": 372.55,
+        "p999_us": 534.44
+      }
+    },
+    "scanned_keys": 600000,
+    "counters": {
+      "zero.range.preallocation.calls": 31,
+      "zero.range.preallocation.wal.calls": 6,
+      "zero.range.preallocation.flush.calls": 6,
+      "zero.range.preallocation.compaction.calls": 19,
+      "zero.range.preallocation.fallbacks": 0,
+      "zero.range.preallocation.failures": 0,
+      "preallocation.truncate.failures": 0,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/mixed-sync1-cmw0/r3-B"
+  },
+  {
+    "workload": "write",
+    "sync": 0,
+    "concurrent": 0,
+    "round": 0,
+    "group": "A0",
+    "ops_sec": 278145.0,
+    "operations": 557284,
+    "process_seconds": 4.47255651501473,
+    "end_to_end_ops_sec": 124600.77321083657,
+    "histograms": {
+      "write": {
+        "count": 557284,
+        "p50_us": 60.19,
+        "p99_us": 103.54,
+        "p999_us": 285.73
+      }
+    },
+    "scanned_keys": 363267,
+    "counters": {
+      "zero.range.preallocation.calls": null,
+      "zero.range.preallocation.wal.calls": null,
+      "zero.range.preallocation.flush.calls": null,
+      "zero.range.preallocation.compaction.calls": null,
+      "zero.range.preallocation.fallbacks": null,
+      "zero.range.preallocation.failures": null,
+      "preallocation.truncate.failures": null,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/write-sync0-cmw0/r0-A0"
+  },
+  {
+    "workload": "write",
+    "sync": 0,
+    "concurrent": 0,
+    "round": 0,
+    "group": "A1",
+    "ops_sec": 275017.0,
+    "operations": 550984,
+    "process_seconds": 4.470096934004687,
+    "end_to_end_ops_sec": 123259.9668719896,
+    "histograms": {
+      "write": {
+        "count": 550984,
+        "p50_us": 61.18,
+        "p99_us": 102.76,
+        "p999_us": 275.51
+      }
+    },
+    "scanned_keys": 360852,
+    "counters": {
+      "zero.range.preallocation.calls": 0,
+      "zero.range.preallocation.wal.calls": 0,
+      "zero.range.preallocation.flush.calls": 0,
+      "zero.range.preallocation.compaction.calls": 0,
+      "zero.range.preallocation.fallbacks": 0,
+      "zero.range.preallocation.failures": 0,
+      "preallocation.truncate.failures": 0,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/write-sync0-cmw0/r0-A1"
+  },
+  {
+    "workload": "write",
+    "sync": 0,
+    "concurrent": 0,
+    "round": 0,
+    "group": "B",
+    "ops_sec": 273684.0,
+    "operations": 548284,
+    "process_seconds": 4.469969842932187,
+    "end_to_end_ops_sec": 122659.44050314657,
+    "histograms": {
+      "write": {
+        "count": 548284,
+        "p50_us": 61.06,
+        "p99_us": 105.18,
+        "p999_us": 309.86
+      }
+    },
+    "scanned_keys": 359728,
+    "counters": {
+      "zero.range.preallocation.calls": 34,
+      "zero.range.preallocation.wal.calls": 9,
+      "zero.range.preallocation.flush.calls": 9,
+      "zero.range.preallocation.compaction.calls": 16,
+      "zero.range.preallocation.fallbacks": 0,
+      "zero.range.preallocation.failures": 0,
+      "preallocation.truncate.failures": 0,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/write-sync0-cmw0/r0-B"
+  },
+  {
+    "workload": "write",
+    "sync": 0,
+    "concurrent": 0,
+    "round": 1,
+    "group": "A1",
+    "ops_sec": 278965.0,
+    "operations": 1395784,
+    "process_seconds": 8.17920284497086,
+    "end_to_end_ops_sec": 170650.37100262463,
+    "histograms": {
+      "write": {
+        "count": 1395784,
+        "p50_us": 59.99,
+        "p99_us": 102.24,
+        "p999_us": 269.92
+      }
+    },
+    "scanned_keys": 541482,
+    "counters": {
+      "zero.range.preallocation.calls": 0,
+      "zero.range.preallocation.wal.calls": 0,
+      "zero.range.preallocation.flush.calls": 0,
+      "zero.range.preallocation.compaction.calls": 0,
+      "zero.range.preallocation.fallbacks": 0,
+      "zero.range.preallocation.failures": 0,
+      "preallocation.truncate.failures": 0,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/write-sync0-cmw0/r1-A1"
+  },
+  {
+    "workload": "write",
+    "sync": 0,
+    "concurrent": 0,
+    "round": 1,
+    "group": "B",
+    "ops_sec": 272355.0,
+    "operations": 1362784,
+    "process_seconds": 7.925858433009125,
+    "end_to_end_ops_sec": 171941.5015444083,
+    "histograms": {
+      "write": {
+        "count": 1362784,
+        "p50_us": 61.31,
+        "p99_us": 105.45,
+        "p999_us": 276.33
+      }
+    },
+    "scanned_keys": 538199,
+    "counters": {
+      "zero.range.preallocation.calls": 71,
+      "zero.range.preallocation.wal.calls": 22,
+      "zero.range.preallocation.flush.calls": 22,
+      "zero.range.preallocation.compaction.calls": 27,
+      "zero.range.preallocation.fallbacks": 0,
+      "zero.range.preallocation.failures": 0,
+      "preallocation.truncate.failures": 0,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/write-sync0-cmw0/r1-B"
+  },
+  {
+    "workload": "write",
+    "sync": 0,
+    "concurrent": 0,
+    "round": 1,
+    "group": "A0",
+    "ops_sec": 277896.0,
+    "operations": 1390484,
+    "process_seconds": 8.07639710395597,
+    "end_to_end_ops_sec": 172166.37345864472,
+    "histograms": {
+      "write": {
+        "count": 1390484,
+        "p50_us": 60.25,
+        "p99_us": 103.58,
+        "p999_us": 289.51
+      }
+    },
+    "scanned_keys": 540926,
+    "counters": {
+      "zero.range.preallocation.calls": null,
+      "zero.range.preallocation.wal.calls": null,
+      "zero.range.preallocation.flush.calls": null,
+      "zero.range.preallocation.compaction.calls": null,
+      "zero.range.preallocation.fallbacks": null,
+      "zero.range.preallocation.failures": null,
+      "preallocation.truncate.failures": null,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/write-sync0-cmw0/r1-A0"
+  },
+  {
+    "workload": "write",
+    "sync": 0,
+    "concurrent": 0,
+    "round": 2,
+    "group": "B",
+    "ops_sec": 273732.0,
+    "operations": 1369884,
+    "process_seconds": 7.876363770104945,
+    "end_to_end_ops_sec": 173923.40424898223,
+    "histograms": {
+      "write": {
+        "count": 1369884,
+        "p50_us": 60.62,
+        "p99_us": 104.98,
+        "p999_us": 282.12
+      }
+    },
+    "scanned_keys": 538887,
+    "counters": {
+      "zero.range.preallocation.calls": 71,
+      "zero.range.preallocation.wal.calls": 22,
+      "zero.range.preallocation.flush.calls": 22,
+      "zero.range.preallocation.compaction.calls": 27,
+      "zero.range.preallocation.fallbacks": 0,
+      "zero.range.preallocation.failures": 0,
+      "preallocation.truncate.failures": 0,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/write-sync0-cmw0/r2-B"
+  },
+  {
+    "workload": "write",
+    "sync": 0,
+    "concurrent": 0,
+    "round": 2,
+    "group": "A0",
+    "ops_sec": 279838.0,
+    "operations": 1400084,
+    "process_seconds": 8.076446683960967,
+    "end_to_end_ops_sec": 173353.9580940254,
+    "histograms": {
+      "write": {
+        "count": 1400084,
+        "p50_us": 59.6,
+        "p99_us": 102.22,
+        "p999_us": 291.92
+      }
+    },
+    "scanned_keys": 541907,
+    "counters": {
+      "zero.range.preallocation.calls": null,
+      "zero.range.preallocation.wal.calls": null,
+      "zero.range.preallocation.flush.calls": null,
+      "zero.range.preallocation.compaction.calls": null,
+      "zero.range.preallocation.fallbacks": null,
+      "zero.range.preallocation.failures": null,
+      "preallocation.truncate.failures": null,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/write-sync0-cmw0/r2-A0"
+  },
+  {
+    "workload": "write",
+    "sync": 0,
+    "concurrent": 0,
+    "round": 2,
+    "group": "A1",
+    "ops_sec": 280170.0,
+    "operations": 1401884,
+    "process_seconds": 8.031008434016258,
+    "end_to_end_ops_sec": 174558.90023252365,
+    "histograms": {
+      "write": {
+        "count": 1401884,
+        "p50_us": 60.01,
+        "p99_us": 103.09,
+        "p999_us": 251.5
+      }
+    },
+    "scanned_keys": 542011,
+    "counters": {
+      "zero.range.preallocation.calls": 0,
+      "zero.range.preallocation.wal.calls": 0,
+      "zero.range.preallocation.flush.calls": 0,
+      "zero.range.preallocation.compaction.calls": 0,
+      "zero.range.preallocation.fallbacks": 0,
+      "zero.range.preallocation.failures": 0,
+      "preallocation.truncate.failures": 0,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/write-sync0-cmw0/r2-A1"
+  },
+  {
+    "workload": "write",
+    "sync": 0,
+    "concurrent": 0,
+    "round": 3,
+    "group": "A0",
+    "ops_sec": 275276.0,
+    "operations": 1377384,
+    "process_seconds": 7.980342551018111,
+    "end_to_end_ops_sec": 172597.102341713,
+    "histograms": {
+      "write": {
+        "count": 1377384,
+        "p50_us": 60.86,
+        "p99_us": 103.59,
+        "p999_us": 274.49
+      }
+    },
+    "scanned_keys": 539646,
+    "counters": {
+      "zero.range.preallocation.calls": null,
+      "zero.range.preallocation.wal.calls": null,
+      "zero.range.preallocation.flush.calls": null,
+      "zero.range.preallocation.compaction.calls": null,
+      "zero.range.preallocation.fallbacks": null,
+      "zero.range.preallocation.failures": null,
+      "preallocation.truncate.failures": null,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/write-sync0-cmw0/r3-A0"
+  },
+  {
+    "workload": "write",
+    "sync": 0,
+    "concurrent": 0,
+    "round": 3,
+    "group": "A1",
+    "ops_sec": 275813.0,
+    "operations": 1379884,
+    "process_seconds": 8.47615514404606,
+    "end_to_end_ops_sec": 162795.98196940476,
+    "histograms": {
+      "write": {
+        "count": 1379884,
+        "p50_us": 60.68,
+        "p99_us": 103.07,
+        "p999_us": 280.37
+      }
+    },
+    "scanned_keys": 539873,
+    "counters": {
+      "zero.range.preallocation.calls": 0,
+      "zero.range.preallocation.wal.calls": 0,
+      "zero.range.preallocation.flush.calls": 0,
+      "zero.range.preallocation.compaction.calls": 0,
+      "zero.range.preallocation.fallbacks": 0,
+      "zero.range.preallocation.failures": 0,
+      "preallocation.truncate.failures": 0,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/write-sync0-cmw0/r3-A1"
+  },
+  {
+    "workload": "write",
+    "sync": 0,
+    "concurrent": 0,
+    "round": 3,
+    "group": "B",
+    "ops_sec": 274991.0,
+    "operations": 1375684,
+    "process_seconds": 7.930735437083058,
+    "end_to_end_ops_sec": 173462.3492252037,
+    "histograms": {
+      "write": {
+        "count": 1375684,
+        "p50_us": 59.92,
+        "p99_us": 104.42,
+        "p999_us": 317.41
+      }
+    },
+    "scanned_keys": 539506,
+    "counters": {
+      "zero.range.preallocation.calls": 73,
+      "zero.range.preallocation.wal.calls": 23,
+      "zero.range.preallocation.flush.calls": 23,
+      "zero.range.preallocation.compaction.calls": 27,
+      "zero.range.preallocation.fallbacks": 0,
+      "zero.range.preallocation.failures": 0,
+      "preallocation.truncate.failures": 0,
+      "stall.micros": 0
+    },
+    "case": "/home/lb/rocksdb-bench-32g-20261124/write-sync0-cmw0/r3-B"
+  }
+]

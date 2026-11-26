@@ -1,0 +1,84 @@
+{
+  "db-bench-20261124": {
+    "log_files": 778,
+    "raw_log_bytes": 6001230,
+    "archive_bytes": 875014,
+    "files": {
+      "aggregate.json": "1a4b50923e814e40b3a508ee98d7f224f066ba3df465c5a208c4bdd9f9c2f883",
+      "audit.json": "fee760e4ac6e3c16971bf39595cc3f21e3f38679f4b027b6d93300b7e12e2dba",
+      "benchmark_matrix_32g.py": "373e5076106509bbe9b41be46efefa5745597183be0f8dbf916873b169b75be6",
+      "environment.json": "9584b676f8bedca1b1efd0d6d998f14ffb218295d2d534bb351d1dd52d7772d5",
+      "raw-logs-manifest.json": "dd861c5e50e38a4f03d969c9436d2d41440a6ecc1abf03a9b53abb705c6de04f",
+      "raw-logs.tar.gz": "c846592161d0a6e6e61e98402cd0123ec6f92d1fb6fc338b0878ce0c63809c18",
+      "results.csv": "6a6ff5befc38985c4b78df6307748bdf4ddfe05ddf9abe3e56bbcfcf30c30cd9",
+      "results.json": "e1961ed49231274b50a2ab507176b0f13366782ce6058a2e05e8bc26472bebef",
+      "summary.md": "48d77a8ffdf110483b5cd2178744cea2b291978bba1f1a7661829dfdf025d176"
+    }
+  },
+  "ycsb-120s-20261125": {
+    "log_files": 180,
+    "raw_log_bytes": 13024940,
+    "archive_bytes": 882111,
+    "files": {
+      "A1.ini": "2e8102f3d3273c1c769ed6cb700df87cccd96e584a1fef00df4a7e5a045801a1",
+      "B.ini": "4a616ad41a74853d3306b867ad42cd1c6c315d7f6efef685931b2cdd703e7863",
+      "JarProbe.java": "01321be84b34c9e585f7b27e74a926965c419f7fb141479ca3712f1d2e30f537",
+      "aggregate.json": "e25ea4dcd5848da52f8a7f8c43e09542b9dc9f040d3542e14dcf5f094a85e4b6",
+      "audit.json": "8961e3a80661ea12d05fda8840cee8732d9cc386839046c07ca7fa4834acae3a",
+      "environment.json": "b4a84b0e958926433a1bb5209b64995535379f30c23faece355e5a9e638fde78",
+      "finalize_report.py": "bdfd89fa716915b9c8d2a34eee8744fdc2dbbf30aecbe753b272f77ba3878619",
+      "jar-verification.json": "a2676c76018d21405d56e81ad89d29702ffbb18789e6898b0c59290fe8ccdcdc",
+      "latency-summary.json": "5ef9bc9633b5f31c796cd5fa66623fe793c7a1132fc756b56a2d615ff2233182",
+      "original-scripts/inc/common.sh": "c9e9ed4f8fda7426f4a442827ab355b506881e10529678f511397faa43a09693",
+      "original-scripts/inc/configs/dbsnappyload.ini": "4cddde8a99e6565ead682928c36e7cacfea4016cf0fa0541b5b7a51fbcec6cab",
+      "original-scripts/inc/configs/dbsnappyrun.ini": "676b2b038d86a1fa30309995d251544b91abb0a11b1894bebd12ba8c75026f41",
+      "original-scripts/load_warm_up.sh": "4708a93b0b44aec64813b5772802fdf37a169c232630e8802a70e9e8cc1a4862",
+      "original-scripts/run.sh": "f391372f001a92e9f283e27b4adb564ac24e49a615892e17995b835ea1117aef",
+      "raw-logs-manifest.json": "997f6451f072a3c6f02b8f013f10f881defa5b20d0e1766193862fb236755327",
+      "raw-logs.tar.gz": "506f2bd1f3a14b8dcdb43c696d9e4f01eb6fbc0782d605163ecdcd886706ac03",
+      "results.csv": "674c227f91b3298c1c5c380ba060e65294322c957911f686b923906b8f012c77",
+      "results.json": "8f35a05769285511faca503d507b5b1105c8cda21c109e32bbc93c90ca03dbcb",
+      "run_matrix.py": "688bbfe6852de58330df6c2a8c41656b5888207f65c4a6d6cdcd9d2190852902",
+      "summary.md": "1243f19b812b3592dae10ba1af9c3b876693539044efcd86f1966b49e6163313",
+      "timed-common.sh": "e58bec2e1ddbc8831bcbab10d340801c03bdb4a3c6874146f72d1d46bd57db6d",
+      "ycsb-source/pom.xml": "973982ed0ebe5995d0d35b42172728a9f1f767f14d36d69abc1e43fbad72a1ab",
+      "ycsb-source/rocksdb/pom.xml": "0bfcc5a72132ec5b84d5d442632a27e6cee67104b90878a1cc9317c78712a57a",
+      "ycsb-source/rocksdb/src/main/java/site/ycsb/db/rocksdb/RocksDBClient.java": "c0239dce269bdc53d180ee7e6ce9437e7fc2184fd07b750c3911331f06a104d0",
+      "ycsb-source/workloads/workloada": "af72a9b4e3734388b21629d3af1f56e5907e8fe086b080f5bfc87ea00d7b8dab",
+      "ycsb-source/workloads/workloadb": "ffd2cee934e5d506e77a9ae27154f41878bd667465ec5ebb608fe71eed0648dc",
+      "ycsb-source/workloads/workloadc": "714c08c48b55afd3964f5128369bbfb06c6b5b84784b57a26e9f027fa5ce7997",
+      "ycsb-source/workloads/workloadd": "3828faaf96a2433f5c2dda1671a0d212bcaef720d7ffe94cea06cfb8c1117533",
+      "ycsb-source/workloads/workloade": "9de216e573a58c3ebce28fffc699c048050dc20237bb0156fe4c7734004c7352",
+      "ycsb-source/workloads/workloadf": "e14757f50bfa2f82123ad2c044d79bc43ef903a3be7456f4cb08dc4049e3e286"
+    }
+  },
+  "ycsb-100m-20261126": {
+    "log_files": 61,
+    "raw_log_bytes": 16295534,
+    "archive_bytes": 1158374,
+    "files": {
+      "A1.ini": "2e8102f3d3273c1c769ed6cb700df87cccd96e584a1fef00df4a7e5a045801a1",
+      "B.ini": "4a616ad41a74853d3306b867ad42cd1c6c315d7f6efef685931b2cdd703e7863",
+      "aggregate.json": "6a2cb65dfc3239cb2d44f613cceabe9484e347fa93ef6277d7d0b3148fbd709f",
+      "audit.json": "f29635732cf2dbd4914cc3cb85fe45f60d990d336f17e128bab7e722005e1fdb",
+      "environment.json": "e26e518f8db10f9286e4ed72af65152a6fc4ff43d6c6de9778897f98c33e4461",
+      "full-common.sh": "f8d628118ae1005f2f2a7db8b3c0b38a9d68bd00fdb7b4c13a64714922122bc9",
+      "jar-verification.json": "a2676c76018d21405d56e81ad89d29702ffbb18789e6898b0c59290fe8ccdcdc",
+      "original-scripts/inc/common.sh": "c9e9ed4f8fda7426f4a442827ab355b506881e10529678f511397faa43a09693",
+      "original-scripts/inc/configs/dbsnappyload.ini": "4cddde8a99e6565ead682928c36e7cacfea4016cf0fa0541b5b7a51fbcec6cab",
+      "original-scripts/inc/configs/dbsnappyrun.ini": "676b2b038d86a1fa30309995d251544b91abb0a11b1894bebd12ba8c75026f41",
+      "original-scripts/load_warm_up.sh": "4708a93b0b44aec64813b5772802fdf37a169c232630e8802a70e9e8cc1a4862",
+      "original-scripts/run.sh": "f391372f001a92e9f283e27b4adb564ac24e49a615892e17995b835ea1117aef",
+      "raw-logs-manifest.json": "73c0a6cd6b79458310556b26acc9351d9468f73199b87194ec933e5699aec7ac",
+      "raw-logs.tar.gz": "7f4e751b5fb9bb605204cdb75eda56db6ab47d6c07bc8588aedef73161302bd6",
+      "results.csv": "13da68519df633f503ef3cf15b388fb41f7abc25015f5d31fe2472a092e234b3",
+      "results.json": "6e47a6c519bff1e9859df862e4e1bf339df0ea88f70eba19b758cc9db1e6165c",
+      "run_full.py": "0559d08fad8cd9e2d5bb413c18d71ab16c2affce3671a866fd517f74f9fc42d6",
+      "summary.md": "d723f2545dca5dde1c0b9195e0561b7d627b9d90e7c529ffd495502b8e0299a7",
+      "warmups.json": "273c762c53417865f6d0625ff761d2ee8fb5b0d98f99773f05369060c62c0dc1"
+    }
+  },
+  "overview": {
+    "README.md": "828f8a3a98df3eca1d463f984617590cac87fad67785cc7689f480ab4e980604"
+  }
+}

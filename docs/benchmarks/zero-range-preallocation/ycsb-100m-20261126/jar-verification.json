@@ -1,0 +1,15 @@
+{
+  "commit": "0a47210279850a86ee97e8fc1dae846d4a110db3",
+  "runtime_jar": "/home/lb/ycsb-zero-range-20261125/runtime/lib/rocksdbjni-6.26.1-linux64.jar",
+  "jar_sha256": "8e25505e855ae3a07d9bdfd2256d8984c9df9bf115212635285783c9e7e95e63",
+  "native_entry": "librocksdbjni-linux-aarch64.so",
+  "native_sha256": "3fea1133ce8e972e1f5d53125e623d15203c72d00943d0feebf05fd2c128bbe0",
+  "java_class_major": 52,
+  "make_flags": "PORTABLE=1 DEBUG_LEVEL=0 make rocksdbjava -j12 DISABLE_WARNING_AS_ERROR=1 DISABLE_JEMALLOC=1",
+  "native_loading": "java.library.path points to empty directory; jar extraction; mapped native SHA256 verified",
+  "native_elf_machine": "AArch64 (183)",
+  "source_tree_verified_clean": true,
+  "source_commit_verified_after_run": "0a47210279850a86ee97e8fc1dae846d4a110db3",
+  "embedded_git_sha": "",
+  "provenance_note": "The native git SHA stamp is empty; provenance is established by the clean target-commit source tree, recorded build command, jar/native SHA256 and runtime loading verification."
+}

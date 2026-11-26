@@ -1,0 +1,18 @@
+{
+  "status": "passed",
+  "formal_trials": 12,
+  "warmups": 2,
+  "expected_and_actual_operations_each": 100000000,
+  "jar_unchanged": true,
+  "actual_total_logical_operations": 1400000000,
+  "non_ok_operations": 0,
+  "memory_failcnt_increase": 0,
+  "oom_kills": 0,
+  "swap_bytes": 0,
+  "source_groups": "same target commit ZERO_RANGE off/on",
+  "runtime_sums_seconds": {
+    "A1": 4160.907,
+    "B": 4168.906000000001
+  },
+  "aggregate_throughput_delta_percent": -0.191872879839472
+}

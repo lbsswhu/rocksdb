@@ -1,0 +1,44 @@
+{
+  "started_at": "2026-11-26T09:19:53+0800",
+  "cgroup_before": {
+    "memory/memory.limit_in_bytes": "34359738368\n",
+    "memory/memory.memsw.limit_in_bytes": "34359738368\n",
+    "memory/memory.failcnt": "0\n",
+    "memory/memory.oom_control": "oom_kill_disable 0\nunder_oom 0\noom_kill 0\n",
+    "memory/memory.stat": "cache 28095217664\nrss 10240000\nrss_huge 0\nshmem 0\nmapped_file 0\ndirty 0\nwriteback 0\nworkingset_refault_anon 0\nworkingset_refault_file 12216306872\nswap 0\nswapcached 0\npgpgin 12768887157\npgpgout 12762672413\npgfault 504925304\npgmajfault 2019\ninactive_anon 10203136\nactive_anon 8192\ninactive_file 1609154560\nactive_file 26620280832\nunevictable 0\nhierarchical_memory_limit 34359738368\nhierarchical_memsw_limit 34359738368\ntotal_cache 28095217664\ntotal_rss 10240000\ntotal_rss_huge 0\ntotal_shmem 0\ntotal_mapped_file 0\ntotal_dirty 0\ntotal_writeback 0\ntotal_workingset_refault_anon 0\ntotal_workingset_refault_file 12216306872\ntotal_swap 0\ntotal_swapcached 0\ntotal_pgpgin 12768887157\ntotal_pgpgout 12762672413\ntotal_pgfault 504925304\ntotal_pgmajfault 2019\ntotal_inactive_anon 10203136\ntotal_active_anon 8192\ntotal_inactive_file 1609154560\ntotal_active_file 26620280832\ntotal_unevictable 0\n",
+    "cpu/cpu.cfs_quota_us": "1600000\n",
+    "cpu/cpu.cfs_period_us": "100000\n",
+    "cpuset/cpuset.cpus": "0-15\n"
+  },
+  "jar": {
+    "commit": "0a47210279850a86ee97e8fc1dae846d4a110db3",
+    "runtime_jar": "/home/lb/ycsb-zero-range-20261125/runtime/lib/rocksdbjni-6.26.1-linux64.jar",
+    "jar_sha256": "8e25505e855ae3a07d9bdfd2256d8984c9df9bf115212635285783c9e7e95e63",
+    "native_entry": "librocksdbjni-linux-aarch64.so",
+    "native_sha256": "3fea1133ce8e972e1f5d53125e623d15203c72d00943d0feebf05fd2c128bbe0",
+    "java_class_major": 52,
+    "make_flags": "PORTABLE=1 DEBUG_LEVEL=0 make rocksdbjava -j12 DISABLE_WARNING_AS_ERROR=1 DISABLE_JEMALLOC=1",
+    "native_loading": "java.library.path points to empty directory; jar extraction; mapped native SHA256 verified",
+    "native_elf_machine": "AArch64 (183)",
+    "source_tree_verified_clean": true,
+    "source_commit_verified_after_run": "0a47210279850a86ee97e8fc1dae846d4a110db3",
+    "embedded_git_sha": "",
+    "provenance_note": "The native git SHA stamp is empty; provenance is established by the clean target-commit source tree, recorded build command, jar/native SHA256 and runtime loading verification."
+  },
+  "rounds": 1,
+  "operations_per_workload": 100000000,
+  "warmup_operations": 100000000,
+  "maxexecutiontime": 0,
+  "method": "A1/B same target JNI jar, off/on; independent seed copies; full 100M read-only warmup; full A-F sequential, no global cache drop, no extra compactall",
+  "completed_at": "2026-11-26T11:59:41+0800",
+  "cgroup_after": {
+    "memory/memory.limit_in_bytes": "34359738368\n",
+    "memory/memory.memsw.limit_in_bytes": "34359738368\n",
+    "memory/memory.failcnt": "0\n",
+    "memory/memory.oom_control": "oom_kill_disable 0\nunder_oom 0\noom_kill 0\n",
+    "memory/memory.stat": "cache 27418599424\nrss 11005952\nrss_huge 0\nshmem 0\nmapped_file 0\ndirty 8994816\nwriteback 0\nworkingset_refault_anon 0\nworkingset_refault_file 15594973641\nswap 0\nswapcached 0\npgpgin 16197830094\npgpgout 16191864013\npgfault 586515216\npgmajfault 2499\ninactive_anon 10997760\nactive_anon 8192\ninactive_file 2711687168\nactive_file 24840921088\nunevictable 0\nhierarchical_memory_limit 34359738368\nhierarchical_memsw_limit 34359738368\ntotal_cache 27418599424\ntotal_rss 11005952\ntotal_rss_huge 0\ntotal_shmem 0\ntotal_mapped_file 0\ntotal_dirty 8994816\ntotal_writeback 0\ntotal_workingset_refault_anon 0\ntotal_workingset_refault_file 15594973641\ntotal_swap 0\ntotal_swapcached 0\ntotal_pgpgin 16197830094\ntotal_pgpgout 16191864013\ntotal_pgfault 586515216\ntotal_pgmajfault 2499\ntotal_inactive_anon 10997760\ntotal_active_anon 8192\ntotal_inactive_file 2711687168\ntotal_active_file 24840921088\ntotal_unevictable 0\n",
+    "cpu/cpu.cfs_quota_us": "1600000\n",
+    "cpu/cpu.cfs_period_us": "100000\n",
+    "cpuset/cpuset.cpus": "0-15\n"
+  }
+}

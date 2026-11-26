@@ -1,0 +1,14 @@
+[
+  {
+    "group": "A1",
+    "actual_operations": 100000000,
+    "ops_sec": 172688.90439251496,
+    "process_seconds": 579.3876630909508
+  },
+  {
+    "group": "B",
+    "actual_operations": 100000000,
+    "ops_sec": 173185.9636240202,
+    "process_seconds": 577.7571966670221
+  }
+]

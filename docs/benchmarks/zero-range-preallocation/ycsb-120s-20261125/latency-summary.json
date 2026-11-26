@@ -1,0 +1,119 @@
+[
+  {
+    "workload": "workloada",
+    "operation": "READ",
+    "p99_us": {
+      "A1": 218.0,
+      "B": 232.0
+    },
+    "delta_percent": 6.422018348623859
+  },
+  {
+    "workload": "workloada",
+    "operation": "UPDATE",
+    "p99_us": {
+      "A1": 254.0,
+      "B": 269.0
+    },
+    "delta_percent": 5.905511811023612
+  },
+  {
+    "workload": "workloadb",
+    "operation": "READ",
+    "p99_us": {
+      "A1": 185.0,
+      "B": 185.0
+    },
+    "delta_percent": 0.0
+  },
+  {
+    "workload": "workloadb",
+    "operation": "UPDATE",
+    "p99_us": {
+      "A1": 206.0,
+      "B": 205.0
+    },
+    "delta_percent": -0.4854368932038833
+  },
+  {
+    "workload": "workloadc",
+    "operation": "READ",
+    "p99_us": {
+      "A1": 154.0,
+      "B": 155.0
+    },
+    "delta_percent": 0.6493506493506551
+  },
+  {
+    "workload": "workloadd",
+    "operation": "INSERT",
+    "p99_us": {
+      "A1": 77.0,
+      "B": 76.0
+    },
+    "delta_percent": -1.2987012987012991
+  },
+  {
+    "workload": "workloadd",
+    "operation": "READ",
+    "p99_us": {
+      "A1": 199.0,
+      "B": 200.0
+    },
+    "delta_percent": 0.5025125628140614
+  },
+  {
+    "workload": "workloade",
+    "operation": "INSERT",
+    "p99_us": {
+      "A1": 68.0,
+      "B": 68.0
+    },
+    "delta_percent": 0.0
+  },
+  {
+    "workload": "workloade",
+    "operation": "SCAN-LATENCY-PER-RECORD",
+    "p99_us": {
+      "A1": 109.0,
+      "B": 108.0
+    },
+    "delta_percent": -0.917431192660545
+  },
+  {
+    "workload": "workloade",
+    "operation": "SCAN",
+    "p99_us": {
+      "A1": 1644.0,
+      "B": 1613.0
+    },
+    "delta_percent": -1.8856447688564426
+  },
+  {
+    "workload": "workloadf",
+    "operation": "READ-MODIFY-WRITE",
+    "p99_us": {
+      "A1": 434.0,
+      "B": 466.0
+    },
+    "delta_percent": 7.373271889400912
+  },
+  {
+    "workload": "workloadf",
+    "operation": "READ",
+    "p99_us": {
+      "A1": 352.0,
+      "B": 375.0
+    },
+    "delta_percent": 6.534090909090917
+  },
+  {
+    "workload": "workloadf",
+    "operation": "UPDATE",
+    "p99_us": {
+      "A1": 160.0,
+      "B": 163.0
+    },
+    "delta_percent": 1.8750000000000044
+  }
+]

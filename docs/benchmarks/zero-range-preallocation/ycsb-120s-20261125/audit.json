@@ -1,0 +1,11 @@
+{
+  "formal_trials": 36,
+  "warmups": 6,
+  "non_ok_operations": 0,
+  "jar_unchanged": true,
+  "native_arch": "aarch64",
+  "memory_failcnt_increase": 0,
+  "oom_kills": 0,
+  "swap_bytes": 0,
+  "status": "passed"
+}

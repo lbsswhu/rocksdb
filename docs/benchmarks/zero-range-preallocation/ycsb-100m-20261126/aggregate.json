@@ -1,0 +1,38 @@
+[
+  {
+    "workload": "workloada",
+    "off_ops_sec": 227977.90438150734,
+    "on_ops_sec": 225471.51731057573,
+    "delta_percent": -1.0993991184063745
+  },
+  {
+    "workload": "workloadb",
+    "off_ops_sec": 330340.4488666019,
+    "on_ops_sec": 330816.91930052073,
+    "delta_percent": 0.14423617681502687
+  },
+  {
+    "workload": "workloadc",
+    "off_ops_sec": 369356.6914505007,
+    "on_ops_sec": 369088.13086388767,
+    "delta_percent": -0.07271036178019274
+  },
+  {
+    "workload": "workloadd",
+    "off_ops_sec": 538418.8791195775,
+    "on_ops_sec": 541310.0786523544,
+    "delta_percent": 0.536979598023124
+  },
+  {
+    "workload": "workloade",
+    "off_ops_sec": 40734.076947486035,
+    "on_ops_sec": 40683.79698622569,
+    "delta_percent": -0.12343464005620808
+  },
+  {
+    "workload": "workloadf",
+    "off_ops_sec": 196798.8695872931,
+    "on_ops_sec": 196288.96090512766,
+    "delta_percent": -0.25910142839477013
+  }
+]
