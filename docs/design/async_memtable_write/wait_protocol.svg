@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="690" viewBox="0 0 1200 690" role="img">
+<title>06  sequence 等待与按需通知协议</title>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke"/></marker></defs>
+<style>text{font-family:"WenQuanYi Zen Hei","Noto Sans CJK SC","Microsoft YaHei",sans-serif} .small{font-size:15px}</style>
+<rect width="1200" height="690" fill="#f8fafc"/>
+<text x="35" y="43" text-anchor="start" font-size="25" font-weight="600" fill="#172b4d">06  sequence 等待与按需通知协议</text>
+<rect x="40" y="95" width="480" height="65" rx="10" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+<text x="280.0" y="133.45" text-anchor="middle" font-size="17" font-weight="400" fill="#172b4d">入口固定目标 T；先检查 P ≥ T</text>
+<rect x="40" y="210" width="480" height="80" rx="10" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+<text x="280.0" y="243.45" text-anchor="middle" font-size="17" font-weight="400" fill="#172b4d">最多 rounds 次轮询</text>
+<text x="280.0" y="268.45" text-anchor="middle" font-size="17" font-weight="400" fill="#172b4d">每轮 Uniform(delay) × multiplier 次 pause</text>
+<path d="M280,160 L280,210" fill="none" stroke="#52647b" stroke-width="1.8" marker-end="url(#arrow)"/>
+<rect x="40" y="345" width="480" height="80" rx="10" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+<text x="280.0" y="378.45" text-anchor="middle" font-size="17" font-weight="400" fill="#172b4d">锁 slot[T % slots]，锁内重查 P</text>
+<text x="280.0" y="403.45" text-anchor="middle" font-size="17" font-weight="400" fill="#172b4d">注册 waiter，再进入 CV wait</text>
+<path d="M280,290 L280,345" fill="none" stroke="#52647b" stroke-width="1.8" marker-end="url(#arrow)"/>
+<rect x="40" y="495" width="480" height="80" rx="10" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+<text x="280.0" y="528.45" text-anchor="middle" font-size="17" font-weight="400" fill="#172b4d">被唤醒后重查 P / error / deadline</text>
+<text x="280.0" y="553.45" text-anchor="middle" font-size="17" font-weight="400" fill="#172b4d">P ≥ T 才成功结束等待</text>
+<path d="M280,425 L280,495" fill="none" stroke="#52647b" stroke-width="1.8" marker-end="url(#arrow)"/>
+<rect x="700" y="95" width="450" height="80" rx="10" fill="#f0fdfa" stroke="#0f766e" stroke-width="1.5"/>
+<text x="925.0" y="128.45" text-anchor="middle" font-size="17" font-weight="400" fill="#172b4d">worker 或 notifier 推进 P</text>
+<text x="925.0" y="153.45" text-anchor="middle" font-size="17" font-weight="400" fill="#172b4d">发送 progress epoch 信号</text>
+<rect x="700" y="240" width="450" height="95" rx="10" fill="#fffbeb" stroke="#b45309" stroke-width="1.5"/>
+<text x="925.0" y="268.45" text-anchor="middle" font-size="17" font-weight="400" fill="#172b4d">notifier：捕获本轮 published</text>
+<text x="925.0" y="293.45" text-anchor="middle" font-size="17" font-weight="400" fill="#172b4d">扫描 (N, published] 覆盖的 slots</text>
+<text x="925.0" y="318.45" text-anchor="middle" font-size="17" font-weight="400" fill="#172b4d">逐槽加锁、通知已有 waiter</text>
+<path d="M925,175 L925,240" fill="none" stroke="#52647b" stroke-width="1.8" marker-end="url(#arrow)"/>
+<path d="M700,290 L620,290 L620,530 L520,530" fill="none" stroke="#b45309" stroke-width="1.8" marker-end="url(#arrow)"/>
+<rect x="700" y="410" width="450" height="80" rx="10" fill="#fffbeb" stroke="#b45309" stroke-width="1.5"/>
+<text x="925.0" y="443.45" text-anchor="middle" font-size="17" font-weight="400" fill="#172b4d">完成通知后才令 N = 本轮 published</text>
+<text x="925.0" y="468.45" text-anchor="middle" font-size="17" font-weight="400" fill="#172b4d">通知期间的新发布留到下一轮</text>
+<path d="M925,335 L925,410" fill="none" stroke="#52647b" stroke-width="1.8" marker-end="url(#arrow)"/>
+<text x="700" y="553" text-anchor="start" font-size="16" font-weight="400" fill="#172b4d">无 waiter：单 worker notifier 休眠</text>
+<text x="700" y="577" text-anchor="start" font-size="16" font-weight="400" fill="#172b4d">多 worker：仍须处理完成报告和退休</text>
+<text x="40" y="635" text-anchor="start" font-size="18" font-weight="400" fill="#172b4d">slot 锁防止 CV 丢唤醒；event 的 register → epoch → recheck → wait 防止事件丢唤醒。</text>
+</svg>

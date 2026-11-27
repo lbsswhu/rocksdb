@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="570" viewBox="0 0 1200 570" role="img">
+<title>03  乱序应用、零记录组与连续前缀</title>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke"/></marker></defs>
+<style>text{font-family:"WenQuanYi Zen Hei","Noto Sans CJK SC","Microsoft YaHei",sans-serif} .small{font-size:15px}</style>
+<rect width="1200" height="570" fill="#f8fafc"/>
+<text x="35" y="43" text-anchor="start" font-size="25" font-weight="600" fill="#172b4d">03  乱序应用、零记录组与连续前缀</text>
+<text x="45" y="101" text-anchor="start" font-size="17" font-weight="600" fill="#172b4d">WAL 顺序</text>
+<rect x="240" y="75" width="280" height="74" rx="10" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+<text x="380.0" y="117.6" text-anchor="middle" font-size="16" font-weight="400" fill="#172b4d">G1：sequence 101–110</text>
+<rect x="555" y="75" width="280" height="74" rx="10" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+<text x="695.0" y="117.6" text-anchor="middle" font-size="16" font-weight="400" fill="#172b4d">G2：仅 LogData，零记录</text>
+<rect x="870" y="75" width="280" height="74" rx="10" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+<text x="1010.0" y="117.6" text-anchor="middle" font-size="16" font-weight="400" fill="#172b4d">G3：sequence 111–120</text>
+<text x="45" y="203" text-anchor="start" font-size="17" font-weight="600" fill="#172b4d">初始状态</text>
+<text x="240" y="203" text-anchor="start" font-size="17" font-weight="400" fill="#172b4d">P=100，Q=D=0；已经分配 A=120。</text>
+<rect x="240" y="240" width="380" height="80" rx="10" fill="#f0fdfa" stroke="#0f766e" stroke-width="1.5"/>
+<text x="430.0" y="273.45" text-anchor="middle" font-size="17" font-weight="400" fill="#172b4d">G2、G3 先完成并清理</text>
+<text x="430.0" y="298.45" text-anchor="middle" font-size="17" font-weight="400" fill="#172b4d">notifier 保留排序元数据</text>
+<rect x="760" y="240" width="390" height="80" rx="10" fill="#fef2f2" stroke="#b91c1c" stroke-width="1.5"/>
+<text x="955.0" y="273.45" text-anchor="middle" font-size="17" font-weight="400" fill="#172b4d">G1 仍未完成：存在前序空洞</text>
+<text x="955.0" y="298.45" text-anchor="middle" font-size="17" font-weight="400" fill="#172b4d">P=100，Q=D=0</text>
+<path d="M620,280 L760,280" fill="none" stroke="#52647b" stroke-width="1.8" marker-end="url(#arrow)"/>
+<rect x="240" y="380" width="380" height="80" rx="10" fill="#f0fdfa" stroke="#0f766e" stroke-width="1.5"/>
+<text x="430.0" y="413.45" text-anchor="middle" font-size="17" font-weight="400" fill="#172b4d">G1 后完成并报告</text>
+<text x="430.0" y="438.45" text-anchor="middle" font-size="17" font-weight="400" fill="#172b4d">完成链表现在为 G1 → G2 → G3</text>
+<path d="M430,320 L430,380" fill="none" stroke="#52647b" stroke-width="1.8" marker-end="url(#arrow)"/>
+<rect x="760" y="380" width="390" height="80" rx="10" fill="#fffbeb" stroke="#b45309" stroke-width="1.5"/>
+<text x="955.0" y="413.45" text-anchor="middle" font-size="17" font-weight="400" fill="#172b4d">连续退休 G1 / G2 / G3</text>
+<text x="955.0" y="438.45" text-anchor="middle" font-size="17" font-weight="400" fill="#172b4d">P=120，Q=D=3</text>
+<path d="M620,420 L760,420" fill="none" stroke="#52647b" stroke-width="1.8" marker-end="url(#arrow)"/>
+<text x="45" y="515" text-anchor="start" font-size="18" font-weight="400" fill="#172b4d">G2 不消耗 sequence，却必须消耗 group ticket 并参加排序、背压和 drain。</text>
+</svg>

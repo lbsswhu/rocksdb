@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="640" viewBox="0 0 1200 640" role="img">
+<title>05  一次合并、零 payload 交接与生命周期</title>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke"/></marker></defs>
+<style>text{font-family:"WenQuanYi Zen Hei","Noto Sans CJK SC","Microsoft YaHei",sans-serif} .small{font-size:15px}</style>
+<rect width="1200" height="640" fill="#f8fafc"/>
+<text x="35" y="43" text-anchor="start" font-size="25" font-weight="600" fill="#172b4d">05  一次合并、零 payload 交接与生命周期</text>
+<rect x="40" y="100" width="220" height="66" rx="10" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+<text x="150.0" y="138.95" text-anchor="middle" font-size="17" font-weight="400" fill="#172b4d">调用者 batch A</text>
+<rect x="310" y="100" width="220" height="66" rx="10" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+<text x="420.0" y="138.95" text-anchor="middle" font-size="17" font-weight="400" fill="#172b4d">调用者 batch B</text>
+<rect x="580" y="100" width="220" height="66" rx="10" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+<text x="690.0" y="138.95" text-anchor="middle" font-size="17" font-weight="400" fill="#172b4d">调用者 batch C</text>
+<text x="900" y="127" text-anchor="start" font-size="16" font-weight="400" fill="#52647b">调用者拥有的内存</text>
+<text x="900" y="151" text-anchor="start" font-size="16" font-weight="400" fill="#52647b">成功返回后允许销毁/复用</text>
+<path d="M150,166 L150,205 L430,205 L430,240" fill="none" stroke="#52647b" stroke-width="1.8" marker-end="url(#arrow)"/>
+<path d="M420,166 L420,205 L430,205 L430,240" fill="none" stroke="#52647b" stroke-width="1.8" marker-end="url(#arrow)"/>
+<path d="M690,166 L690,205 L430,205 L430,240" fill="none" stroke="#52647b" stroke-width="1.8" marker-end="url(#arrow)"/>
+<text x="775" y="209" text-anchor="start" font-size="17" font-weight="400" fill="#b45309">此处发生一次 owned 合并复制</text>
+<rect x="170" y="240" width="690" height="106" rx="10" fill="#f0fdfa" stroke="#0f766e" stroke-width="1.5"/>
+<text x="515.0" y="273.95" text-anchor="middle" font-size="17" font-weight="400" fill="#172b4d">AsyncCommitGroup 独立持有的 WriteBatch</text>
+<text x="515.0" y="298.95" text-anchor="middle" font-size="17" font-weight="400" fill="#172b4d">Header | range A | range B | range C</text>
+<text x="515.0" y="323.95" text-anchor="middle" font-size="17" font-weight="400" fill="#172b4d">ranges 只保存字节 offset、record index、sequence 和选项</text>
+<rect x="35" y="415" width="300" height="75" rx="10" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+<text x="185.0" y="445.95" text-anchor="middle" font-size="17" font-weight="400" fill="#172b4d">WAL writer</text>
+<text x="185.0" y="470.95" text-anchor="middle" font-size="17" font-weight="400" fill="#172b4d">直接读取 apply_batch</text>
+<rect x="450" y="415" width="310" height="75" rx="10" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+<text x="605.0" y="445.95" text-anchor="middle" font-size="17" font-weight="400" fill="#172b4d">executor queue node</text>
+<text x="605.0" y="470.95" text-anchor="middle" font-size="17" font-weight="400" fill="#172b4d">shared_ptr 指向 group</text>
+<rect x="875" y="415" width="290" height="75" rx="10" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+<text x="1020.0" y="445.95" text-anchor="middle" font-size="17" font-weight="400" fill="#172b4d">MemTable worker</text>
+<text x="1020.0" y="470.95" text-anchor="middle" font-size="17" font-weight="400" fill="#172b4d">按原 buffer 的 offset 解析</text>
+<path d="M300,346 L185,415" fill="none" stroke="#52647b" stroke-width="1.8" marker-end="url(#arrow)"/>
+<path d="M605,346 L605,415" fill="none" stroke="#52647b" stroke-width="1.8" marker-end="url(#arrow)"/>
+<path d="M760,452 L875,452" fill="none" stroke="#0f766e" stroke-width="1.8" marker-end="url(#arrow)"/>
+<text x="817" y="405" text-anchor="middle" font-size="15" font-weight="400" fill="#0f766e">无 payload 复制</text>
+<rect x="170" y="540" width="900" height="62" rx="10" fill="#fffbeb" stroke="#b45309" stroke-width="1.5"/>
+<text x="620.0" y="576.95" text-anchor="middle" font-size="17" font-weight="400" fill="#172b4d">CF / MemTable 另行取引用；后台不再访问原 Writer、WriteGroup 或用户 CF handle</text>
+</svg>
